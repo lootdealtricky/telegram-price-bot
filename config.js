@@ -4,7 +4,7 @@ module.exports = {
   TRIGGER_KEYWORDS: ["deal","loot"],
   CHECK_INTERVAL_MINUTES: 5,
   PRICE_INCREASE_PERCENT: 20,
-  CHANNEL_NAME_TEXT: "@YourChannel",
-  BOT_TAG: "@lootdealtrickybot"
+  CHANNEL_NAME_TEXT: "@lootdealtricky",
+  BOT_TAG: "@Ldt_admin_bot"
 };
 
