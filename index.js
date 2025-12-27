@@ -1,84 +1,84 @@
 const { Telegraf } = require('telegraf');
 const puppeteer = require('puppeteer');
-const express = require('express');
 
-// Express setup taaki Render bot ko band na kare
-const app = express();
-app.get('/', (req, res) => res.send('Bot is Active!'));
-app.listen(process.env.PORT || 3000);
-
-const BOT_TOKEN = process.env.BOT_TOKEN;
+// 🔐 Token aur Channel ID ko hide rakha gaya hai (Render Dashboard se control honge)
+const BOT_TOKEN = process.env.BOT_TOKEN; 
 const CHANNEL_ID = process.env.CHANNEL_ID; 
 
 const bot = new Telegraf(BOT_TOKEN);
-const TRIGGER_KEYWORDS = ['loot', 'loooot', 'fast'];
+const keywords = ['loot', 'loooot', 'fast'];
 
 bot.on('channel_post', async (ctx) => {
     const text = ctx.channelPost.text || "";
-    const messageId = ctx.channelPost.message_id;
+    const msgId = ctx.channelPost.message_id;
+    const chatId = ctx.chat.id;
 
-    const lowerText = text.toLowerCase();
-    const hasKeyword = TRIGGER_KEYWORDS.some(word => lowerText.includes(word));
-    
-    if (!hasKeyword) return;
+    // 1. Keyword Check
+    const isLoot = keywords.some(k => text.toLowerCase().includes(k));
+    if (!isLoot) return;
 
+    // 2. URL aur Price extract karna
     const urlMatch = text.match(/https?:\/\/[^\s]+/);
-    const priceMatch = text.match(/(?:Price|Rs|₹)[:\s]*(\d+)/i);
-
+    const priceMatch = text.match(/Price[:\s]*(\d+)/i);
+    
     if (urlMatch && priceMatch) {
+        const oldPrice = parseInt(priceMatch[1]);
         const url = urlMatch[0];
-        const originalPrice = parseFloat(priceMatch[1]);
-        monitorPrice(url, originalPrice, messageId, text);
+        console.log(`Monitoring started for: ${url}`);
+        monitorPrice(url, oldPrice, msgId, chatId, text);
     }
 });
 
-async function monitorPrice(url, originalPrice, messageId, oldText) {
-    const targetPrice = originalPrice * 1.20; 
+async function monitorPrice(url, oldPrice, msgId, chatId, oldText) {
     let browser;
-
     try {
+        // 🐳 Docker aur Render ke liye optimized Puppeteer settings
         browser = await puppeteer.launch({
             executablePath: '/usr/bin/google-chrome',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--single-process'
+            ]
         });
 
         const check = async () => {
             const page = await browser.newPage();
             try {
-                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+                
+                // Amazon/Flipkart ke liye price nikalne ka logic
+                const currentPrice = await page.$eval('.a-price-whole', el => 
+                    parseInt(el.innerText.replace(/\D/g,''))
+                ).catch(() => null);
 
-                const data = await page.evaluate(() => {
-                    const priceSelectors = ['.a-price-whole', '._30jeq3._16Jk6d', '.pdp-price'];
-                    let foundPrice = null;
-                    for (let s of priceSelectors) {
-                        const el = document.querySelector(s);
-                        if (el) {
-                            foundPrice = parseFloat(el.innerText.replace(/[^0-9]/g, ''));
-                            break;
-                        }
-                    }
-                    const outOfStock = document.body.innerText.toLowerCase().includes('out of stock') || 
-                                     document.body.innerText.toLowerCase().includes('currently unavailable');
-                    return { currentPrice: foundPrice, isOutOfStock: outOfStock };
-                });
+                const outOfStock = await page.content().then(html => 
+                    html.includes("Out of Stock") || html.includes("Currently unavailable")
+                );
 
-                if (data.isOutOfStock || (data.currentPrice && data.currentPrice >= targetPrice)) {
-                    let reason = data.isOutOfStock ? "OUT OF STOCK" : "PRICE UP";
-                    const newText = `${oldText}\n\n━━━━━━━━━━━━━━━\n⚠️ ${reason}!\nPrice Over Ho Gaya Hai.\n\nChannel: ${CHANNEL_ID}\nBot: @lootdealtricky bot`;
+                // 20% Price Badhne ya Out of Stock hone par edit karein
+                if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.20)) {
+                    let reason = outOfStock ? "Out of Stock" : "Price Up";
+                    const newText = `${oldText}\n\n⚠️ ${reason} ho gaya hai!\n@lootdealtricky bot`;
                     
-                    await bot.telegram.editMessageText(CHANNEL_ID, messageId, null, newText);
+                    await bot.telegram.editMessageText(chatId, msgId, null, newText);
                     await browser.close();
-                    return; 
+                    return; // Monitoring Stop
                 }
-            } catch (e) { console.log("Retrying..."); }
-            finally { if(!page.isClosed()) await page.close(); }
-            
-            setTimeout(check, 120000); // Har 2 minute mein check karega
+            } catch (err) {
+                console.log("Check failed, retrying...");
+            } finally {
+                await page.close();
+            }
+            setTimeout(check, 120000); // Har 2 minute me check karega
         };
+
         check();
-    } catch (err) { console.error(err); }
+    } catch (e) {
+        if (browser) await browser.close();
+        console.error("Browser error:", e);
+    }
 }
 
-bot.launch();
-console.log("Bot started successfully...");
+bot.launch().then(() => console.log("Bot is running..."));
