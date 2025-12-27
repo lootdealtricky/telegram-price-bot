@@ -4,7 +4,7 @@ const express = require('express');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
-const keywords = ['loot', 'loooot', 'fast'];
+const keywords = ['loot', 'grabfast', 'fast'];
 
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Running Live!'));
@@ -34,12 +34,12 @@ bot.on('channel_post', async (ctx) => {
     }
 
     if (url && oldPrice) {
-        console.log(`Monitoring Started: ${url} | Base Price: ${oldPrice}`);
-        monitorPrice(url, oldPrice, msgId, chatId);
+        console.log(`Monitoring Started: ${url} | Price: ${oldPrice}`);
+        monitorPrice(url, oldPrice, msgId, chatId, text); // यहाँ 'text' भी भेज रहे हैं
     }
 });
 
-async function monitorPrice(url, oldPrice, msgId, chatId) {
+async function monitorPrice(url, oldPrice, msgId, chatId, oldText) {
     let browser;
     try {
         browser = await puppeteer.launch({
@@ -52,37 +52,36 @@ async function monitorPrice(url, oldPrice, msgId, chatId) {
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
                 
-                // Amazon aur Flipkart ke selectors
+                // Flipkart/Amazon Price Selectors
                 const currentPrice = await page.$eval('.a-price-whole, ._30jeq3, ._25b18c, .nx-cp0', el => 
                     parseInt(el.innerText.replace(/\D/g,''))
                 ).catch(() => null);
 
                 const outOfStock = await page.content().then(html => 
-                    html.includes("Out of Stock") || html.includes("Currently unavailable") || html.includes("Sold Out") || html.includes("This item is currently out of stock")
+                    html.includes("Out of Stock") || html.includes("Currently unavailable") || html.includes("Sold Out")
                 );
 
-                console.log(`Checking: ${currentPrice || 'Price missing'} | Stock: ${!outOfStock}`);
+                console.log(`Check: ${currentPrice || 'N/A'} | Stock: ${!outOfStock}`);
 
-                // Edit Logic: Delete nahi, sirf text badalna
                 if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.20)) {
-                    const newText = `Price Over Now \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    // पुराने टेक्स्ट को बरकरार रखते हुए नीचे मैसेज जोड़ना
+                    const newText = `${oldText}\n\nPrice Over Now \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    
                     await bot.telegram.editMessageText(chatId, msgId, null, newText);
-                    console.log("✅ Post edited successfully (Price Over)!");
+                    console.log("✅ Message edited keeping old text!");
                     await browser.close();
                     return; 
                 }
             } catch (err) {
-                console.log("Check failed, retrying in 1 mins...");
+                console.log("Retry in 2m...");
             } finally {
                 await page.close();
             }
-            setTimeout(check, 60000); 
+            setTimeout(check, 120000); 
         };
-
         check();
     } catch (e) {
         if (browser) await browser.close();
-        console.error("Browser Error:", e);
     }
 }
 
