@@ -1,8 +1,9 @@
+// index.js ki shuruat aise karein
+const BOT_TOKEN = process.env.BOT_TOKEN; // Ye safe tarika hai
+const bot = new Telegraf(BOT_TOKEN);
+
 const { Telegraf } = require('telegraf');
 const puppeteer = require('puppeteer');
-
-const BOT_TOKEN = 'YAHAN_APNA_TOKEN_DALEIN'; 
-const bot = new Telegraf(BOT_TOKEN);
 
 const keywords = ['loot', 'loooot', 'fast'];
 
