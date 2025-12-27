@@ -1,14 +1,18 @@
 {
-  "name": "loot-monitor-bot",
+  "name": "loot-price-monitor-bot",
   "version": "1.0.0",
-  "description": "Telegram Price Monitor Bot",
+  "description": "Telegram bot to monitor price and edit channel messages",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "telegraf": "^4.12.2",
-    "puppeteer": "^21.0.0",
-    "express": "^4.18.2"
-  }
+    "puppeteer": "^21.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "author": "Jivika",
+  "license": "ISC"
 }
