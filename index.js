@@ -73,11 +73,11 @@ async function monitorPrice(url, oldPrice, msgId, chatId, oldText) {
                     return; 
                 }
             } catch (err) {
-                console.log("Retry in 2m...");
+                console.log("Retry in 1m...");
             } finally {
                 await page.close();
             }
-            setTimeout(check, 120000); 
+            setTimeout(check, 60000); 
         };
         check();
     } catch (e) {
