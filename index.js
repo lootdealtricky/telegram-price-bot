@@ -72,11 +72,11 @@ async function monitorPrice(url, oldPrice, msgId, chatId) {
                     return; 
                 }
             } catch (err) {
-                console.log("Check failed, retrying in 2 mins...");
+                console.log("Check failed, retrying in 1 mins...");
             } finally {
                 await page.close();
             }
-            setTimeout(check, 120000); 
+            setTimeout(check, 60000); 
         };
 
         check();
