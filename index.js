@@ -2,45 +2,36 @@ const { Telegraf } = require('telegraf');
 const puppeteer = require('puppeteer');
 const express = require('express');
 
-// Environment Variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID; 
-
 const bot = new Telegraf(BOT_TOKEN);
 const keywords = ['loot', 'loooot', 'fast'];
 
-// 1. Debugging: Check if Bot is starting
 console.log("Starting Bot...");
-console.log("Target Channel:", CHANNEL_ID);
 
 bot.on('channel_post', async (ctx) => {
-    // 2. Debugging: Check every post
-    console.log("--- New Post Received in Channel ---");
+    console.log("--- New Post Received ---");
     const text = ctx.channelPost.text || "";
     const msgId = ctx.channelPost.message_id;
     const chatId = ctx.chat.id;
 
-    console.log("Post Content:", text);
-    console.log("From Chat ID:", chatId);
-
-    // 3. Keyword Check
+    // 1. Keyword Check
     const isLoot = keywords.some(k => text.toLowerCase().includes(k));
-    if (!isLoot) {
-        console.log("Keyword not found. Ignoring.");
-        return;
-    }
+    if (!isLoot) return;
 
-    // 4. URL aur Price extract karna
+    // 2. सुधरा हुआ URL और Price निकालने का तरीका
+    // यह लिंक को ढूंढेगा (amzn.to या amazon.in दोनों)
     const urlMatch = text.match(/https?:\/\/[^\s]+/);
-    const priceMatch = text.match(/Price[:\s]*(\d+)/i);
+    
+    // यह किसी भी 2 से 6 डिजिट के नंबर को Price मान लेगा जो पोस्ट के आखिर में या कहीं भी हो
+    const priceMatch = text.match(/(?:Price[:\s]*|#Flipkart\s*|#Amazon\s*)?(\d{2,6})/i);
     
     if (urlMatch && priceMatch) {
         const oldPrice = parseInt(priceMatch[1]);
         const url = urlMatch[0];
-        console.log(`✅ Success: Monitoring started for: ${url} at Price: ${oldPrice}`);
+        console.log(`✅ Monitoring: ${url} | Price Found: ${oldPrice}`);
         monitorPrice(url, oldPrice, msgId, chatId, text);
     } else {
-        console.log("❌ Error: Message has keywords but missing Price or URL.");
+        console.log("❌ Error: Could not extract Price or URL clearly.");
     }
 });
 
@@ -55,49 +46,49 @@ async function monitorPrice(url, oldPrice, msgId, chatId, oldText) {
         const check = async () => {
             const page = await browser.newPage();
             try {
-                console.log(`Checking price for: ${url}`);
+                // User Agent ताकि Amazon ब्लॉक न करे
+                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
+                
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
                 
-                // Amazon/Flipkart Logic
-                const currentPrice = await page.$eval('.a-price-whole', el => 
-                    parseInt(el.innerText.replace(/\D/g,''))
-                ).catch(() => null);
+                // प्राइस निकालने की कोशिश (Amazon/Flipkart दोनों के लिए)
+                const currentPrice = await page.evaluate(() => {
+                    const el = document.querySelector('.a-price-whole') || document.querySelector('._30jeq3');
+                    return el ? parseInt(el.innerText.replace(/\D/g, '')) : null;
+                });
 
                 const outOfStock = await page.content().then(html => 
-                    html.includes("Out of Stock") || html.includes("Currently unavailable")
+                    html.includes("Out of Stock") || html.includes("Currently unavailable") || html.includes("Sold Out")
                 );
 
-                if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.20)) {
-                    let reason = outOfStock ? "Out of Stock" : `Price Up (Now: ${currentPrice})`;
-                    console.log(`⚠️ Alert: ${reason}. Editing message...`);
+                console.log(`Checking ${url} | Current: ${currentPrice} | Target: ${oldPrice}`);
+
+                if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.15)) {
+                    let reason = outOfStock ? "OUT OF STOCK" : "PRICE UP";
+                    const newText = `${oldText}\n\n⚠️ ${reason} हो गया है!`;
                     
-                    const newText = `${oldText}\n\n⚠️ ${reason} ho gaya hai!\n@lootdealtricky bot`;
                     await bot.telegram.editMessageText(chatId, msgId, null, newText);
+                    console.log("✅ Message Edited Successfully.");
                     await browser.close();
                     return; 
                 }
-                console.log("Price is still okay.");
             } catch (err) {
-                console.log("Check failed, retrying in 2 mins...");
+                console.log("Error during check, retrying...");
             } finally {
                 await page.close();
             }
-            setTimeout(check, 120000); 
+            setTimeout(check, 180000); // 3 मिनट में चेक करें
         };
         check();
     } catch (e) {
         if (browser) await browser.close();
-        console.error("Browser error:", e);
+        console.error("Browser Error:", e);
     }
 }
 
-// 5. Bot Launch with Error Handling
-bot.launch()
-    .then(() => console.log("🚀 Bot is officially running and listening to channel!"))
-    .catch((err) => console.error("Failed to launch bot:", err));
+bot.launch();
 
-// 6. Web Server for Render
+// Render Server
 const app = express();
-app.get('/', (req, res) => res.send('Bot is Running Live!'));
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+app.get('/', (req, res) => res.send('Bot is Running!'));
+app.listen(process.env.PORT || 10000);
