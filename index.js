@@ -1,113 +1,53 @@
-const TelegramBot = require("node-telegram-bot-api");
-const axios = require("axios");
-const cheerio = require("cheerio");
-const cron = require("node-cron");
-const config = require("./config");
+const { Telegraf } = require('telegraf');
+const puppeteer = require('puppeteer');
 
-const bot = new TelegramBot(config.BOT_TOKEN, { polling: true });
+const BOT_TOKEN = 'YAHAN_APNA_TOKEN_DALEIN'; 
+const bot = new Telegraf(BOT_TOKEN);
 
-// In-memory tracking
-const activeChecks = new Map();
+const keywords = ['loot', 'loooot', 'fast'];
 
-/* -------------------------
-   UTIL: Extract URL
--------------------------- */
-function extractURL(text) {
-  const match = text.match(/https?:\/\/[^\s]+/i);
-  return match ? match[0] : null;
-}
+bot.on('channel_post', async (ctx) => {
+    const text = ctx.channelPost.text || "";
+    const msgId = ctx.channelPost.message_id;
+    const chatId = ctx.chat.id;
 
-/* -------------------------
-   UTIL: Extract Price
--------------------------- */
-function extractPrice(text) {
-  const match = text.replace(/,/g, "").match(/₹\s?(\d+)/);
-  return match ? parseInt(match[1]) : null;
-}
+    // Keyword Check
+    const isLoot = keywords.some(k => text.toLowerCase().includes(k));
+    if (!isLoot) return;
 
-/* -------------------------
-   SCRAPE PRICE
--------------------------- */
-async function fetchCurrentPrice(url) {
-  const res = await axios.get(url, {
-    headers: { "User-Agent": "Mozilla/5.0" }
-  });
-
-  const $ = cheerio.load(res.data);
-
-  // Example: Amazon selector (adjust per site)
-  const priceText =
-    $("#priceblock_ourprice").text() ||
-    $("#priceblock_dealprice").text();
-
-  if (!priceText) {
-    return { outOfStock: true };
-  }
-
-  const price = parseInt(priceText.replace(/[₹,]/g, ""));
-  return { price, outOfStock: false };
-}
-
-/* -------------------------
-   START PRICE MONITOR
--------------------------- */
-function startMonitoring(chatId, messageId, url, basePrice, originalText) {
-  const key = `${chatId}_${messageId}`;
-  if (activeChecks.has(key)) return;
-
-  const task = cron.schedule(`*/${config.CHECK_INTERVAL_MINUTES} * * * *`, async () => {
-    try {
-      const data = await fetchCurrentPrice(url);
-
-      if (data.outOfStock) {
-        await bot.editMessageText(
-          `${originalText}\n\n❌ PRICE BADH GAYA / PRODUCT OUT OF STOCK\n${config.CHANNEL_NAME_TEXT}\n${config.BOT_TAG}`,
-          { chat_id: chatId, message_id: messageId }
-        );
-        task.stop();
-        activeChecks.delete(key);
-        return;
-      }
-
-      const threshold = Math.round(basePrice * (1 + config.PRICE_INCREASE_PERCENT / 100));
-
-      if (data.price >= threshold) {
-        await bot.editMessageText(
-          `${originalText}\n\n⚠️ PRICE BADH GAYA HAI (₹${data.price})\n${config.CHANNEL_NAME_TEXT}\n${config.BOT_TAG}`,
-          { chat_id: chatId, message_id: messageId }
-        );
-        task.stop();
-        activeChecks.delete(key);
-      }
-    } catch (err) {
-      console.error("Price check error:", err.message);
+    // URL aur Price nikalna (Example: Price: 499)
+    const url = text.match(/https?:\/\/[^\s]+/)?.[0];
+    const priceMatch = text.match(/Price[:\s]*(\d+)/i);
+    
+    if (url && priceMatch) {
+        const oldPrice = parseInt(priceMatch[1]);
+        checkPrice(url, oldPrice, msgId, chatId, text);
     }
-  });
+});
 
-  activeChecks.set(key, task);
+async function checkPrice(url, oldPrice, msgId, chatId, oldText) {
+    const browser = await puppeteer.launch({
+        executablePath: '/usr/bin/google-chrome', // Render ke liye zaroori
+        args: ['--no-sandbox']
+    });
+
+    const timer = setInterval(async () => {
+        const page = await browser.newPage();
+        try {
+            await page.goto(url);
+            // Price check karne ka asaan tarika (is selector ko website ke hisab se badalna pad sakta hai)
+            const currentPrice = await page.$eval('.a-price-whole', el => parseInt(el.innerText.replace(/\D/g,''))).catch(() => null);
+            
+            // Agar price 20% badh gaya
+            if (currentPrice > oldPrice * 1.20 || !currentPrice) {
+                const newText = `${oldText}\n\n⚠️ Price Up ho gaya hai!\n@lootdealtricky bot`;
+                await bot.telegram.editMessageText(chatId, msgId, null, newText);
+                clearInterval(timer);
+                await browser.close();
+            }
+        } catch (e) { console.log("Checking..."); }
+        await page.close();
+    }, 60000); // Har 1 minute me check karega
 }
 
-/* -------------------------
-   CHANNEL MESSAGE LISTENER
--------------------------- */
-bot.on("channel_post", async msg => {
-  if (!msg.text) return;
-
-  const text = msg.text.toLowerCase();
-  const triggered = config.TRIGGER_KEYWORDS.some(k => text.includes(k));
-
-  if (!triggered) return;
-
-  const url = extractURL(msg.text);
-  const basePrice = extractPrice(msg.text);
-
-  if (!url || !basePrice) return;
-
-  startMonitoring(
-    msg.chat.id,
-    msg.message_id,
-    url,
-    basePrice,
-    msg.text
-  );
-});
+bot.launch();
