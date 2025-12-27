@@ -1,15 +1,17 @@
-# Pehle se Chrome install wala image use karein
+# Node.js का इमेज इस्तेमाल करें
 FROM ghcr.io/puppeteer/puppeteer:latest
 
-# Bot ke folder mein jayein
-WORKDIR /usr/src/app
+# Bot का फोल्डर बनाएँ
+WORKDIR /app
 
-# Dependencies copy karein aur install karein
+# Permissions सेट करें
+USER root
+
+# Files कॉपी करें
 COPY package*.json ./
 RUN npm install
 
-# Baaki code copy karein
 COPY . .
 
-# Bot ko start karein
-CMD [ "node", "index.js" ]
+# Bot स्टार्ट करें
+CMD ["node", "index.js"]
