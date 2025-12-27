@@ -97,7 +97,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, timestamp) {
                 );
 
                 if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.20)) {
-                    const newText = `Price Over Now \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    const newText = `❌Price Over Now❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
                     await bot.telegram.editMessageText(chatId, msgId, null, newText);
                     db.remove({ msgId: msgId });
                     await browser.close();
