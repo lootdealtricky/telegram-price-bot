@@ -2,76 +2,106 @@ const { Telegraf } = require('telegraf');
 const puppeteer = require('puppeteer');
 const express = require('express');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// 🔐 Configuration
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const CHANNEL_ID = process.env.CHANNEL_ID; 
+const bot = new Telegraf(BOT_TOKEN);
 const keywords = ['loot', 'loooot', 'fast'];
 
+// 🌐 Web Server for Render (24/7 keeping alive)
+const app = express();
+app.get('/', (req, res) => res.send('Bot is Running Live!'));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+
+// 📩 Handling Channel Posts
 bot.on('channel_post', async (ctx) => {
-    console.log("--- New Post Received ---");
     const text = ctx.channelPost.text || "";
     const msgId = ctx.channelPost.message_id;
     const chatId = ctx.chat.id;
 
-    const isLoot = keywords.some(k => text.toLowerCase().includes(k));
-    if (!isLoot) return;
+    console.log("--- Naya Message Mila! ---");
 
+    // 1. Keyword Check
+    const isLoot = keywords.some(k => text.toLowerCase().includes(k));
+    if (!isLoot) {
+        console.log("Keyword nahi mila, skip kar raha hoon.");
+        return;
+    }
+
+    // 2. URL Extract karna
     const urlMatch = text.match(/https?:\/\/[^\s]+/);
-    const priceMatch = text.match(/(?:Price[:\s]*|#Flipkart\s*|#Amazon\s*|Bulb\s*|Rating\s*|Bee\s*)?(\d{2,6})/i);
+    if (!urlMatch) {
+        console.log("URL nahi mila.");
+        return;
+    }
+    const url = urlMatch[0];
+
+    // 3. URL के सबसे पास वाला Price ढूंढना (URL के पहले का आखिरी नंबर)
+    const textBeforeUrl = text.substring(0, text.indexOf(url));
+    const allNumbers = textBeforeUrl.match(/\d+/g); 
     
-    if (urlMatch && priceMatch) {
-        const oldPrice = parseInt(priceMatch[1]);
-        const url = urlMatch[0];
-        console.log(`✅ Monitoring: ${url} | Price Found: ${oldPrice}`);
-        monitorPrice(url, oldPrice, msgId, chatId, text);
+    let oldPrice = null;
+    if (allNumbers && allNumbers.length > 0) {
+        // URL के सबसे करीब वाला नंबर उठाना
+        oldPrice = parseInt(allNumbers[allNumbers.length - 1]);
+    }
+
+    if (url && oldPrice) {
+        console.log(`Monitoring Started: ${url} | Base Price: ${oldPrice}`);
+        monitorPrice(url, oldPrice, msgId, chatId);
+    } else {
+        console.log("Price ya URL dhang se nahi mila.");
     }
 });
 
-async function monitorPrice(url, oldPrice, msgId, chatId, oldText) {
+// 🕵️ Price Monitor Function
+async function monitorPrice(url, oldPrice, msgId, chatId) {
     let browser;
     try {
-        // Render के लिए सुधरा हुआ Puppeteer Launch
         browser = await puppeteer.launch({
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            executablePath: '/usr/bin/google-chrome',
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process']
         });
 
         const check = async () => {
             const page = await browser.newPage();
             try {
-                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/119.0.0.0');
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
                 
-                const currentPrice = await page.evaluate(() => {
-                    const el = document.querySelector('.a-price-whole') || document.querySelector('._30jeq3');
-                    return el ? parseInt(el.innerText.replace(/\D/g, '')) : null;
-                });
+                // Amazon/Flipkart price selector
+                const currentPrice = await page.$eval('.a-price-whole, ._30jeq3', el => 
+                    parseInt(el.innerText.replace(/\D/g,''))
+                ).catch(() => null);
 
                 const outOfStock = await page.content().then(html => 
-                    html.includes("Out of Stock") || html.includes("Currently unavailable")
+                    html.includes("Out of Stock") || html.includes("Currently unavailable") || html.includes("Sold Out")
                 );
 
-                console.log(`Checking: ${currentPrice || 'N/A'}`);
+                console.log(`Checking ${url.substring(0,30)}... Current: ${currentPrice} | Stock: ${!outOfStock}`);
 
+                // 20% badhne par ya Stock khatam hone par edit
                 if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.20)) {
-                    const newText = `${oldText}\n\n⚠️ Price Up or Out of Stock!`;
+                    const newText = `Price Over Now \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    
                     await bot.telegram.editMessageText(chatId, msgId, null, newText);
+                    console.log("Price Over! Message edited.");
                     await browser.close();
-                    return;
+                    return; 
                 }
             } catch (err) {
-                console.log("Check failed, retrying...");
+                console.log("Page check failed, retrying...");
             } finally {
                 await page.close();
             }
-            setTimeout(check, 180000);
+            setTimeout(check, 120000); // Har 2 minute me check
         };
+
         check();
     } catch (e) {
         if (browser) await browser.close();
-        console.error("Browser error:", e.message);
+        console.error("Browser Error:", e);
     }
 }
 
-bot.launch().then(() => console.log("🚀 Bot is Active!"));
-
-const app = express();
-app.get('/', (req, res) => res.send('Bot Live'));
-app.listen(process.env.PORT || 10000);
+bot.launch().then(() => console.log("Bot is running..."));
