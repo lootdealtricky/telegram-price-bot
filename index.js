@@ -95,7 +95,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, oldText) {
 
                 // 20% price hike or Out of Stock condition
                 if (outOfStock || (currentPrice && currentPrice > oldPrice * 1.20)) {
-                    const newText = `${oldText}\n\nPrice Over Now \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    const newText = `${oldText}\n\nDeal Over Now \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
                     
                     await bot.telegram.editMessageText(chatId, msgId, null, newText);
                     console.log("✅ Message edited successfully!");
