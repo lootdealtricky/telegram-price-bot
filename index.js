@@ -2,7 +2,8 @@ const { Telegraf } = require('telegraf');
 const puppeteer = require('puppeteer');
 
 // 🔐 Token aur Channel ID ko hide rakha gaya hai (Render Dashboard se control honge)
-const BOT_TOKEN = process.env.BOT_TOKEN; 
+const BOT_TOKEN = process.env.BOT_TOKEN;
+console.log("Token length check:", BOT_TOKEN ? BOT_TOKEN.length : "Token Missing");
 const CHANNEL_ID = process.env.CHANNEL_ID; 
 
 const bot = new Telegraf(BOT_TOKEN);
