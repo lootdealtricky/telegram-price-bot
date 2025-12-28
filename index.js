@@ -107,4 +107,6 @@ bot.on('message', (ctx) => {
     console.log("Messege Mila:", ctx.message.text);
     ctx.reply("I am working!");
 });
-bot.launch();
+bot.launch()
+  .then(() => console.log("✅ BOT CONNECTED TO TELEGRAM!"))
+  .catch(err => console.error("❌ BOT LAUNCH ERROR:", err));
