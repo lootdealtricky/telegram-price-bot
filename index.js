@@ -73,9 +73,16 @@ async function monitorPrice(url, oldPrice, msgId, chatId, timestamp) {
     try {
         // Render के लिए standard launch settings
         browser = await puppeteer.launch({
-            headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
+    headless: "new",
+    // Render के लिए ये args बहुत जरूरी हैं
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--single-process',
+        '--no-zygote'
+    ]
+});
         
         const check = async () => {
             // 24 घंटे बाद ट्रैकिंग बंद
