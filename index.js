@@ -48,6 +48,8 @@ bot.on('channel_post', async (ctx) => {
     }
 });
 
+// ... बाकी कोड वही रहेगा ...
+
 async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp, isCouponPost) {
     let browser;
     try {
@@ -74,14 +76,52 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                     let foundPrice = null;
                     for (let s of priceSelectors) {
                         const el = document.querySelector(s);
-                        if (el) {
-                            foundPrice = parseInt(el.innerText.replace(/\D/g, ''));
-                            if (foundPrice) break;
+                        if (el && el.innerText) {
+                            let p = parseInt(el.innerText.replace(/\D/g, ''));
+                            if (p > 0) { foundPrice = p; break; }
                         }
                     }
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out/i.test(document.body.innerText);
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok/i.test(document.body.innerText);
                     return { foundPrice, isOutOfStock, fullText: document.body.innerText.toLowerCase() };
                 });
+
+                console.log(`📊 Stats: ${url.substring(0, 15)} | Old: ${oldPrice} | Now: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
+
+                let couponMissing = isCouponPost && !['coupon', 'voucher', 'apply', 'off', 'collect'].some(k => pageData.fullText.includes(k));
+
+                // --- सुधारा हुआ Logic ---
+                // सिर्फ तभी ओवर बोलो जब प्राइस बढ़े (घटे तो नहीं)
+                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice > (oldPrice * 1.25));
+                
+                if (pageData.isOutOfStock || isPriceIncreased || couponMissing) {
+                    console.log(`🚨 Condition Met! Stock: ${pageData.isOutOfStock}, Increased: ${isPriceIncreased}, CouponMissing: ${couponMissing}`);
+                    
+                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    
+                    try {
+                        if (isMedia) {
+                            await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
+                        } else {
+                            await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
+                        }
+                    } catch (e) { console.log("Edit failed:", e.message); }
+
+                    db.remove({ msgId });
+                    await browser.close();
+                    return;
+                }
+            } catch (e) {
+                console.log(`⚠️ Check failed for ${url.substring(0, 15)}: ${e.message}`);
+            } finally {
+                if (!page.isClosed()) await page.close();
+            }
+            setTimeout(check, 180000); 
+        };
+        check();
+    } catch (e) {
+        if (browser) await browser.close();
+    }
+}
 
                 console.log(`📊 Stats: ${url.substring(0, 15)} | Price: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
 
