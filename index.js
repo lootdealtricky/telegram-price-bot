@@ -29,19 +29,23 @@ bot.on('channel_post', async (ctx) => {
 
     const url = urlMatches[0];
     const hasTriggerKeyword = triggerKeywords.some(k => lowerText.includes(k));
-    const isOnlyUrl = text.replace(url, '').trim() === "";
     
-    const textWithoutUrl = text.replace(url, '').replace(/[^\d]/g, '').trim();
-    const isOnlyNumbersAndUrl = textWithoutUrl.length > 0 && text.replace(url, '').replace(/[\d\s\W]/g, '').length === 0;
+    if (hasTriggerKeyword || text.replace(url, '').trim() === "") {
+        console.log(`🎯 Valid Task Found: ${url}`);
+        
+        // Smart Price Picking: Sabse chhota number lo (aksar wahi loot price hota hai)
+        const allNumbers = text.match(/\b\d{2,5}\b/g); 
+        let oldPrice = allNumbers ? Math.min(...allNumbers.map(Number)) : 0;
+        
+        const isCouponPost = lowerText.includes('coupon') || lowerText.includes('apply');
+        const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
 
-    if (hasTriggerKeyword || isOnlyUrl || isOnlyNumbersAndUrl) {
-        console.log(`🎯 Validating URL Structure: ${url}`);
-        // मॉनिटरिंग शुरू करें, हम ब्राउज़र के अंदर ही चेक कर लेंगे कि यह मास्टरलिंक तो नहीं
-        monitorPrice(url, text, msgId, chatId, text, Date.now());
+        db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now(), isCouponPost });
+        monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
     }
 });
 
-async function monitorPrice(url, originalText, msgId, chatId, text, timestamp) {
+async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp, isCouponPost) {
     let browser;
     try {
         browser = await puppeteer.launch({
@@ -50,32 +54,20 @@ async function monitorPrice(url, originalText, msgId, chatId, text, timestamp) {
         });
 
         const check = async () => {
+            if (Date.now() - timestamp > 86400000) {
+                db.remove({ msgId });
+                if (browser) await browser.close();
+                return;
+            }
+
             const page = await browser.newPage();
             try {
-                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-                
-                // 1. Unshorten/Navigate
-                const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-                const finalUrl = page.url(); // यहाँ हमें असली बड़ा लिंक मिलेगा
+                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+                await new Promise(r => setTimeout(r, 4000));
 
-                // 2. Masterlink Detection (ASIN check for Amazon)
-                // Amazon का सिंगल प्रोडक्ट लिंक हमेशा /dp/ या /gp/product/ के बाद 10 अक्षरों का ASIN रखता है
-                const isAmazonProduct = finalUrl.includes('/dp/') || finalUrl.includes('/gp/product/');
-                const isFlipkartProduct = finalUrl.includes('/p/') || finalUrl.includes('pid=');
-
-                if (finalUrl.includes('amazon.in') && !isAmazonProduct) {
-                    console.log(`⏭️ Skipping: Amazon Masterlink detected (${finalUrl})`);
-                    await browser.close(); return;
-                }
-                
-                if (finalUrl.includes('flipkart.com') && !isFlipkartProduct) {
-                    console.log(`⏭️ Skipping: Flipkart Masterlink detected (${finalUrl})`);
-                    await browser.close(); return;
-                }
-
-                // --- यहाँ से पुराना प्राइस और स्टॉक चेक लॉजिक ---
                 const pageData = await page.evaluate(() => {
-                    const priceSelectors = ['.a-price-whole', '._30jeq3', '._25b18c', '.pdp-price'];
+                    const priceSelectors = ['.a-price-whole', '._30jeq3', '._25b18c', '.pdp-price', '.price'];
                     let foundPrice = null;
                     for (let s of priceSelectors) {
                         const el = document.querySelector(s);
@@ -84,26 +76,35 @@ async function monitorPrice(url, originalText, msgId, chatId, text, timestamp) {
                             if (p > 0) { foundPrice = p; break; }
                         }
                     }
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out/i.test(document.body.innerText);
-                    return { foundPrice, isOutOfStock };
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok/i.test(document.body.innerText);
+                    const hasCouponOnPage = /coupon|voucher|apply|promo/i.test(document.body.innerText);
+                    return { foundPrice, isOutOfStock, hasCouponOnPage };
                 });
 
-                // Price logic (as discussed before)
-                const allNumbers = text.match(/\b\d{1,5}\b/g); 
-                let oldPrice = allNumbers ? parseInt(allNumbers[allNumbers.length - 1]) : 0;
+                console.log(`📊 Stats: ${url.substring(0, 20)} | Post Price: ${oldPrice} | Live: ${pageData.foundPrice} | Coupon: ${pageData.hasCouponOnPage}`);
 
-                if (pageData.isOutOfStock || (oldPrice > 0 && pageData.foundPrice >= (oldPrice * 1.25))) {
+                const isOutOfStock = pageData.isOutOfStock;
+                // Price high tabhi maano jab coupon bhi na ho aur price badh jaye
+                const isPriceHigh = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30)) && !pageData.hasCouponOnPage;
+                
+                // Agar post coupon wali hai toh page par coupon hona chahiye
+                let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
+
+                if (isOutOfStock || isPriceHigh || couponMissing) {
                     const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
-                    await bot.telegram.editMessageText(chatId, msgId, null, updatedText).catch(() => 
-                          bot.telegram.editMessageCaption(chatId, msgId, null, updatedText).catch(() => null)
-                    );
+                    try {
+                        if (isMedia) {
+                            await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
+                        } else {
+                            await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
+                        }
+                    } catch (e) {}
                     db.remove({ msgId });
                     await browser.close();
                     return;
                 }
-
             } catch (e) {
-                console.log(`⚠️ Check Error: ${e.message}`);
+                console.log(`⚠️ Error: ${e.message}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
