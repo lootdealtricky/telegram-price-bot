@@ -8,7 +8,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
 // Keywords logic
-const triggerKeywords = ['loot', 'pincode', 'reg', 'available', 'grab', 'price', 'deal', 'coupon', 'off', 'voucher', 'flat', 'lowest', 'apply', 'discount', 'free']; 
+const triggerKeywords = ['loot', 'pincode', 'reg', 'available', 'grab', 'price', 'deal', 'coupon', 'voucher', 'flat', 'lowest', 'apply', 'discount', 'free']; 
 const exclusionKeywords = ['guide', 'ajiio.in', 'review', 'sale ended'];
 
 const app = express();
