@@ -1,14 +1,19 @@
 {
-  "name": "telegram-price-bot",
+  "name": "loot-price-monitor-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Telegram Price Tracker Bot",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "render-postbuild": "puppeteer install"
   },
   "dependencies": {
-    "telegraf": "^4.16.3",
-    "puppeteer": "^23.11.1",
-    "express": "^4.18.2"
+    "telegraf": "^4.15.3",
+    "puppeteer": "^21.5.0",
+    "express": "^4.18.2",
+    "nedb": "^1.8.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
