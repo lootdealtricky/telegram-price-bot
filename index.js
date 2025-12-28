@@ -22,18 +22,29 @@ bot.on('channel_post', async (ctx) => {
     const chatId = ctx.chat.id;
     const lowerText = text.toLowerCase().trim();
 
+    // 1. Exclusion Check
     if (exclusionKeywords.some(k => lowerText.includes(k))) return;
 
-    const urlMatch = text.match(/https?:\/\/[^\s]+/);
-    if (!urlMatch) return;
-    const url = urlMatch[0];
+    // 2. Link Count Check (Multiple links skip logic)
+    const urlMatches = text.match(/https?:\/\/[^\s]+/g); // 'g' flag for all matches
+    
+    if (!urlMatches || urlMatches.length === 0) return; // कोई लिंक नहीं तो छोड़ो
+    
+    if (urlMatches.length > 1) {
+        console.log(`🚫 Skipping: Post contains ${urlMatches.length} links.`);
+        return; // एक से ज्यादा लिंक हैं तो यहीं से वापस (Skip)
+    }
 
+    const url = urlMatches[0]; // अब सिर्फ एक ही लिंक है
+
+    // 3. Trigger Logic
     const hasTrigger = triggerKeywords.some(k => lowerText.includes(k));
-    const isOnlyUrl = text.replace(url, '').trim() === "";
-    const isUrlWithNumbers = /\d+/.test(text.replace(url, ''));
+    const textWithoutUrl = text.replace(url, '').trim();
+    const isOnlyUrl = textWithoutUrl === ""; 
+    const isUrlWithNumbers = /\d+/.test(textWithoutUrl); 
 
     if (hasTrigger || isOnlyUrl || isUrlWithNumbers) {
-        console.log(`🎯 New Task: ${url}`);
+        console.log(`🎯 Valid Task (Single Link): ${url}`);
         const allNumbers = text.match(/\d+/g);
         let oldPrice = allNumbers ? parseInt(allNumbers[allNumbers.length - 1]) : 0;
         const isCouponPost = lowerText.includes('coupon') || lowerText.includes('voucher');
