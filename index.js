@@ -90,5 +90,14 @@ async function monitorPrice(url, oldPrice, msgId, chatId, timestamp) {
         check();
     } catch (e) { if (browser) await browser.close(); }
 }
-
+browser = await puppeteer.launch({
+    headless: "new",
+    executablePath: '/usr/bin/google-chrome', // Docker के लिए जरूरी पाथ
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+    ]
+});
 bot.launch();
