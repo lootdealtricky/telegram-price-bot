@@ -17,7 +17,6 @@ app.listen(process.env.PORT || 10000);
 bot.launch().then(() => console.log("✅ BOT CONNECTED TO TELEGRAM!"));
 
 bot.on('channel_post', async (ctx) => {
-    // Media posts के लिए caption और text posts के लिए text
     const text = ctx.channelPost.text || ctx.channelPost.caption || "";
     const msgId = ctx.channelPost.message_id;
     const chatId = ctx.chat.id;
@@ -30,25 +29,21 @@ bot.on('channel_post', async (ctx) => {
 
     const url = urlMatches[0];
     const hasTrigger = triggerKeywords.some(k => lowerText.includes(k));
-    const textWithoutUrl = text.replace(url, '').trim();
-    const isOnlyUrl = textWithoutUrl === ""; 
-    const isUrlWithNumbers = /\d+/.test(textWithoutUrl); 
-
-    if (hasTrigger || isOnlyUrl || isUrlWithNumbers) {
+    
+    if (hasTrigger || text.replace(url, '').trim() === "" || /\d+/.test(text)) {
         console.log(`🎯 Valid Task: ${url}`);
-        const allNumbers = text.match(/\d+/g);
-        let oldPrice = allNumbers ? parseInt(allNumbers[allNumbers.length - 1]) : 0;
-        const isCouponPost = lowerText.includes('coupon') || lowerText.includes('voucher');
         
-        // यह चेक करना कि पोस्ट मीडिया (Photo/Video) है या सिर्फ टेक्स्ट
+        // पिनकोड जैसे बड़े नंबर्स को इग्नोर करके असली प्राइस ढूंढना
+        const allNumbers = text.match(/\b\d{1,5}\b/g); 
+        let oldPrice = allNumbers ? parseInt(allNumbers[allNumbers.length - 1]) : 0;
+        
+        const isCouponPost = lowerText.includes('coupon') || lowerText.includes('voucher');
         const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
 
         db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now(), isCouponPost });
         monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
     }
 });
-
-// ... बाकी कोड वही रहेगा ...
 
 async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp, isCouponPost) {
     let browser;
@@ -69,7 +64,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
             try {
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 50000 });
-                await new Promise(r => setTimeout(r, 4000));
+                await new Promise(r => setTimeout(r, 5000)); // 5 sec wait for price load
 
                 const pageData = await page.evaluate(() => {
                     const priceSelectors = ['.a-price-whole', '._30jeq3', '._25b18c', '.nx-cp0', '.pdp-price', '.price'];
@@ -85,17 +80,20 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                     return { foundPrice, isOutOfStock, fullText: document.body.innerText.toLowerCase() };
                 });
 
-                console.log(`📊 Stats: ${url.substring(0, 15)} | Old: ${oldPrice} | Now: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
+                console.log(`📊 Stats: ${url.substring(0, 15)} | Post Price: ${oldPrice} | Live: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
 
-                let couponMissing = isCouponPost && !['coupon', 'voucher', 'apply', 'off', 'collect'].some(k => pageData.fullText.includes(k));
-
-                // --- सुधारा हुआ Logic ---
-                // सिर्फ तभी ओवर बोलो जब प्राइस बढ़े (घटे तो नहीं)
-                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice > (oldPrice * 1.25));
+                // Fake Check: सिर्फ तभी ओवर जब प्राइस बढ़े या स्टॉक जाए
+                const isOutOfStock = pageData.isOutOfStock;
+                const isPriceHigh = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.25));
                 
-                if (pageData.isOutOfStock || isPriceIncreased || couponMissing) {
-                    console.log(`🚨 Condition Met! Stock: ${pageData.isOutOfStock}, Increased: ${isPriceIncreased}, CouponMissing: ${couponMissing}`);
-                    
+                let couponMissing = false;
+                if (isCouponPost) {
+                    const couponKeywords = ['coupon', 'voucher', 'apply', 'collect', 'off'];
+                    couponMissing = !couponKeywords.some(k => pageData.fullText.includes(k));
+                }
+
+                if (isOutOfStock || isPriceHigh || couponMissing) {
+                    console.log(`🚨 OVER CONFIRMED: ${url}`);
                     const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
                     
                     try {
@@ -111,40 +109,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                     return;
                 }
             } catch (e) {
-                console.log(`⚠️ Check failed for ${url.substring(0, 15)}: ${e.message}`);
-            } finally {
-                if (!page.isClosed()) await page.close();
-            }
-            setTimeout(check, 180000); 
-        };
-        check();
-    } catch (e) {
-        if (browser) await browser.close();
-    }
-}
-
-                console.log(`📊 Stats: ${url.substring(0, 15)} | Price: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
-
-                let couponMissing = isCouponPost && !['coupon', 'voucher', 'apply', 'off'].some(k => pageData.fullText.includes(k));
-
-                if (pageData.isOutOfStock || (oldPrice > 0 && pageData.foundPrice > oldPrice * 1.25) || couponMissing) {
-                    
-                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
-                    
-                    if (isMedia) {
-                        // फोटो/वीडियो का कैप्शन एडिट करें
-                        await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText).catch(e => console.log("Caption Edit Error:", e.message));
-                    } else {
-                        // सिर्फ टेक्स्ट पोस्ट एडिट करें
-                        await bot.telegram.editMessageText(chatId, msgId, null, updatedText).catch(e => console.log("Text Edit Error:", e.message));
-                    }
-
-                    db.remove({ msgId });
-                    await browser.close();
-                    return;
-                }
-            } catch (e) {
-                console.log(`⚠️ Check failed for ${url.substring(0, 15)}`);
+                console.log(`⚠️ Retry: ${url.substring(0, 15)}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
