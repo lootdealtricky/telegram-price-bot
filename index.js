@@ -17,44 +17,38 @@ app.listen(process.env.PORT || 10000);
 bot.launch().then(() => console.log("✅ BOT CONNECTED TO TELEGRAM!"));
 
 bot.on('channel_post', async (ctx) => {
-    const text = ctx.channelPost.text || "";
+    // Media posts के लिए caption और text posts के लिए text
+    const text = ctx.channelPost.text || ctx.channelPost.caption || "";
     const msgId = ctx.channelPost.message_id;
     const chatId = ctx.chat.id;
     const lowerText = text.toLowerCase().trim();
 
-    // 1. Exclusion Check
     if (exclusionKeywords.some(k => lowerText.includes(k))) return;
 
-    // 2. Link Count Check (Multiple links skip logic)
-    const urlMatches = text.match(/https?:\/\/[^\s]+/g); // 'g' flag for all matches
-    
-    if (!urlMatches || urlMatches.length === 0) return; // कोई लिंक नहीं तो छोड़ो
-    
-    if (urlMatches.length > 1) {
-        console.log(`🚫 Skipping: Post contains ${urlMatches.length} links.`);
-        return; // एक से ज्यादा लिंक हैं तो यहीं से वापस (Skip)
-    }
+    const urlMatches = text.match(/https?:\/\/[^\s]+/g);
+    if (!urlMatches || urlMatches.length > 1) return; 
 
-    const url = urlMatches[0]; // अब सिर्फ एक ही लिंक है
-
-    // 3. Trigger Logic
+    const url = urlMatches[0];
     const hasTrigger = triggerKeywords.some(k => lowerText.includes(k));
     const textWithoutUrl = text.replace(url, '').trim();
     const isOnlyUrl = textWithoutUrl === ""; 
     const isUrlWithNumbers = /\d+/.test(textWithoutUrl); 
 
     if (hasTrigger || isOnlyUrl || isUrlWithNumbers) {
-        console.log(`🎯 Valid Task (Single Link): ${url}`);
+        console.log(`🎯 Valid Task: ${url}`);
         const allNumbers = text.match(/\d+/g);
         let oldPrice = allNumbers ? parseInt(allNumbers[allNumbers.length - 1]) : 0;
         const isCouponPost = lowerText.includes('coupon') || lowerText.includes('voucher');
         
-        db.insert({ url, oldPrice, msgId, chatId, timestamp: Date.now(), isCouponPost });
-        monitorPrice(url, oldPrice, msgId, chatId, Date.now(), isCouponPost);
+        // यह चेक करना कि पोस्ट मीडिया (Photo/Video) है या सिर्फ टेक्स्ट
+        const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
+
+        db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now(), isCouponPost });
+        monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
     }
 });
 
-async function monitorPrice(url, oldPrice, msgId, chatId, timestamp, isCouponPost) {
+async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp, isCouponPost) {
     let browser;
     try {
         browser = await puppeteer.launch({
@@ -89,12 +83,22 @@ async function monitorPrice(url, oldPrice, msgId, chatId, timestamp, isCouponPos
                     return { foundPrice, isOutOfStock, fullText: document.body.innerText.toLowerCase() };
                 });
 
-                console.log(`📊 Stats: ${url.substring(0, 15)} | Old: ${oldPrice} | Now: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
+                console.log(`📊 Stats: ${url.substring(0, 15)} | Price: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
 
                 let couponMissing = isCouponPost && !['coupon', 'voucher', 'apply', 'off'].some(k => pageData.fullText.includes(k));
 
                 if (pageData.isOutOfStock || (oldPrice > 0 && pageData.foundPrice > oldPrice * 1.25) || couponMissing) {
-                    await bot.telegram.editMessageText(chatId, msgId, null, `❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`).catch(() => null);
+                    
+                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    
+                    if (isMedia) {
+                        // फोटो/वीडियो का कैप्शन एडिट करें
+                        await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText).catch(e => console.log("Caption Edit Error:", e.message));
+                    } else {
+                        // सिर्फ टेक्स्ट पोस्ट एडिट करें
+                        await bot.telegram.editMessageText(chatId, msgId, null, updatedText).catch(e => console.log("Text Edit Error:", e.message));
+                    }
+
                     db.remove({ msgId });
                     await browser.close();
                     return;
@@ -108,7 +112,6 @@ async function monitorPrice(url, oldPrice, msgId, chatId, timestamp, isCouponPos
         };
         check();
     } catch (e) {
-        console.log("❌ Fatal Browser Error:", e.message);
         if (browser) await browser.close();
     }
 }
