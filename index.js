@@ -7,7 +7,7 @@ const db = new Datastore({ filename: 'tasks.db', autoload: true });
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
-const triggerKeywords = ['loot', 'pincode', 'reg', 'available', 'grab', 'price', 'deal', 'coupon', 'off', 'voucher', 'flat', 'lowest', 'apply']; 
+const triggerKeywords = ['loot', 'pincode', 'reg', 'available', 'grab', 'price', 'deal', 'coupon', 'off', 'voucher', 'flat', 'lowest', 'apply', 'discount', 'free']; 
 const exclusionKeywords = ['guide', 'ajiio.in', 'review', 'sale ended'];
 
 const app = express();
@@ -28,12 +28,18 @@ bot.on('channel_post', async (ctx) => {
     if (!urlMatches || urlMatches.length > 1) return; 
 
     const url = urlMatches[0];
-    const hasTrigger = triggerKeywords.some(k => lowerText.includes(k));
     
-    if (hasTrigger || text.replace(url, '').trim() === "" || /\d+/.test(text)) {
-        console.log(`🎯 Valid Task: ${url}`);
+    // --- Naya Logic ---
+    const hasTriggerKeyword = triggerKeywords.some(k => lowerText.includes(k));
+    const isOnlyUrl = text.replace(url, '').trim() === "";
+    
+    // Check: Kya link ke ilawa post mein sirf numbers/symbols hain? (Jaise: 99 https://...)
+    const textWithoutUrl = text.replace(url, '').replace(/[^\d]/g, '').trim();
+    const isOnlyNumbersAndUrl = textWithoutUrl.length > 0 && text.replace(url, '').replace(/[\d\s\W]/g, '').length === 0;
+
+    if (hasTriggerKeyword || isOnlyUrl || isOnlyNumbersAndUrl) {
+        console.log(`🎯 Trigger Matched: Starting track for ${url}`);
         
-        // पिनकोड जैसे बड़े नंबर्स को इग्नोर करके असली प्राइस ढूंढना
         const allNumbers = text.match(/\b\d{1,5}\b/g); 
         let oldPrice = allNumbers ? parseInt(allNumbers[allNumbers.length - 1]) : 0;
         
@@ -42,6 +48,8 @@ bot.on('channel_post', async (ctx) => {
 
         db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now(), isCouponPost });
         monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
+    } else {
+        console.log(`⏭️ Skipping: Neither keywords nor only-numbers found.`);
     }
 });
 
@@ -64,7 +72,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
             try {
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 50000 });
-                await new Promise(r => setTimeout(r, 5000)); // 5 sec wait for price load
+                await new Promise(r => setTimeout(r, 5000));
 
                 const pageData = await page.evaluate(() => {
                     const priceSelectors = ['.a-price-whole', '._30jeq3', '._25b18c', '.nx-cp0', '.pdp-price', '.price'];
@@ -80,22 +88,15 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                     return { foundPrice, isOutOfStock, fullText: document.body.innerText.toLowerCase() };
                 });
 
-                console.log(`📊 Stats: ${url.substring(0, 15)} | Post Price: ${oldPrice} | Live: ${pageData.foundPrice} | Stock: ${!pageData.isOutOfStock}`);
+                console.log(`📊 Stats: ${url.substring(0, 15)} | Old: ${oldPrice} | Now: ${pageData.foundPrice}`);
 
-                // Fake Check: सिर्फ तभी ओवर जब प्राइस बढ़े या स्टॉक जाए
                 const isOutOfStock = pageData.isOutOfStock;
                 const isPriceHigh = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.25));
                 
-                let couponMissing = false;
-                if (isCouponPost) {
-                    const couponKeywords = ['coupon', 'voucher', 'apply', 'collect', 'off'];
-                    couponMissing = !couponKeywords.some(k => pageData.fullText.includes(k));
-                }
+                let couponMissing = isCouponPost && !['coupon', 'voucher', 'apply', 'collect', 'off'].some(k => pageData.fullText.includes(k));
 
                 if (isOutOfStock || isPriceHigh || couponMissing) {
-                    console.log(`🚨 OVER CONFIRMED: ${url}`);
                     const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
-                    
                     try {
                         if (isMedia) {
                             await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
@@ -103,7 +104,6 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                             await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
                         }
                     } catch (e) { console.log("Edit failed:", e.message); }
-
                     db.remove({ msgId });
                     await browser.close();
                     return;
