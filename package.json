@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "render-postbuild": "puppeteer install"
+    "render-postbuild": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "telegraf": "^4.15.3",
