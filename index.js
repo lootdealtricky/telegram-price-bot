@@ -14,34 +14,23 @@ const app = express();
 app.get('/', (req, res) => res.send('Bot is Running Live!'));
 app.listen(process.env.PORT || 10000);
 
-bot.launch().then(() => console.log("✅ BOT CONNECTED & READY!"));
+bot.launch().then(() => console.log("✅ BOT CONNECTED!"));
 
 bot.on('channel_post', async (ctx) => {
     const text = ctx.channelPost.text || ctx.channelPost.caption || "";
     const msgId = ctx.channelPost.message_id;
     const chatId = ctx.chat.id;
-    const lowerText = text.toLowerCase().trim();
-
-    if (exclusionKeywords.some(k => lowerText.includes(k))) return;
 
     const urlMatches = text.match(/https?:\/\/[^\s]+/g);
-    if (!urlMatches || urlMatches.length > 1) return; 
+    if (!urlMatches) return; 
 
     const url = urlMatches[0];
-    const hasNumbers = /\d+/.test(text);
-
-    if (triggerKeywords.some(k => lowerText.includes(k)) || hasNumbers || text.replace(url, '').trim() === "") {
-        console.log(`🎯 New Task Received: ${url}`);
-        
-        // Smart Price Picking (Aakhri chhota number jo PIN code na ho)
-        const allNumbers = text.match(/\b\d{2,5}\b/g); 
-        let oldPrice = allNumbers ? Math.min(...allNumbers.map(Number)) : 0;
-        
-        const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
-
-        db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now() });
-        monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now());
-    }
+    const allNumbers = text.match(/\b\d{2,5}\b/g); 
+    let oldPrice = allNumbers ? Math.min(...allNumbers.map(Number)) : 0;
+    
+    const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video);
+    db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now() });
+    monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now());
 });
 
 async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp) {
@@ -49,80 +38,67 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--no-zygote']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
         const check = async () => {
-            if (Date.now() - timestamp > 86400000) { // 24 Hours limit
-                db.remove({ msgId });
-                if (browser) await browser.close();
-                return;
-            }
-
             const page = await browser.newPage();
             try {
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
                 
                 console.log(`🔗 Navigating: ${url}`);
-                // networkidle0 taaki redirections poore ho sakein
-                await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-                // Extra wait for affiliate links/redirectors (like lootdealtricky or fktr)
-                await new Promise(r => setTimeout(r, 15000));
-
-                const finalUrl = page.url();
-                console.log(`✅ Final Landing URL: ${finalUrl}`);
+                // **NEW: Affiliate Redirector Bypass**
+                // 15-20 second wait taaki affiliate scripts apna kaam kar sakein
+                await new Promise(r => setTimeout(r, 20000)); 
 
                 const pageData = await page.evaluate(() => {
                     const priceSelectors = [
-                        '.a-price-whole', '.priceToPay', '.a-offscreen', 
-                        '._30jeq3', '._25b18c', '.pdp-price', '.pdp-discount-price', 
-                        '.price-main-price', '.css-1j6m64', '.pdp-m-price'
+                        '.a-price-whole', '.priceToPay', '._30jeq3', '.pdp-price', 
+                        '.pdp-discount-price', '.price-main-price', '.css-1j6m64', '.pdp-m-price'
                     ];
+                    
                     let foundPrice = null;
                     for (let s of priceSelectors) {
-                        const els = document.querySelectorAll(s);
-                        for (let el of els) {
+                        const el = document.querySelector(s);
+                        if (el && el.innerText) {
                             let p = parseInt(el.innerText.replace(/\D/g, ''));
-                            if (p > 5) { foundPrice = p; break; }
+                            if (p > 10) { foundPrice = p; break; }
                         }
-                        if (foundPrice) break;
                     }
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok|Abhi upalabdh nahin|not available/i.test(document.body.innerText);
-                    return { foundPrice, isOutOfStock };
+                    
+                    const bodyText = document.body.innerText;
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|not available/i.test(bodyText);
+                    return { foundPrice, isOutOfStock, currentUrl: window.location.href };
                 });
 
-                console.log(`📊 Stats | Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
+                console.log(`📊 Result | Final URL: ${pageData.currentUrl.substring(0, 40)}... | Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
-                // 35% Price increase margin
-                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.35));
-
-                if (pageData.isOutOfStock || isPriceIncreased) {
-                    console.log("🚨 DEAL OVER! Updating Telegram...");
-                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                // Decision Logic
+                if (pageData.foundPrice || pageData.isOutOfStock) {
+                    const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice >= (oldPrice * 1.35));
                     
-                    try {
-                        if (isMedia) {
-                            await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
-                        } else {
-                            await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
-                        }
-                    } catch (e) { console.log("Edit Fail:", e.message); }
-                    
-                    db.remove({ msgId });
-                    await browser.close();
-                    return;
+                    if (pageData.isOutOfStock || isPriceIncreased) {
+                        const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌`;
+                        try {
+                            if (isMedia) { await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText); }
+                            else { await bot.telegram.editMessageText(chatId, msgId, null, updatedText); }
+                        } catch (e) {}
+                        db.remove({ msgId });
+                        await browser.close();
+                        return;
+                    }
                 }
             } catch (e) {
-                console.log(`⚠️ Check Failed: ${e.message}`);
+                console.log(`⚠️ Error: ${e.message}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
-            setTimeout(check, 300000); // Check every 5 mins
+            setTimeout(check, 300000); 
         };
         check();
     } catch (e) {
         if (browser) await browser.close();
     }
 }
-
