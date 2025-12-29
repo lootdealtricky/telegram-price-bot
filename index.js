@@ -7,37 +7,41 @@ const db = new Datastore({ filename: 'tasks.db', autoload: true });
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
-const triggerKeywords = ['loot', 'deal', 'price', 'coupon', 'off', 'apply', 'lowest']; 
-const exclusionKeywords = ['guide', 'review'];
+const triggerKeywords = ['loot', 'deal', 'price', 'coupon', 'off', 'apply', 'lowest', 'grab']; 
+const exclusionKeywords = ['guide', 'review', 'sale ended'];
 
 const app = express();
-app.get('/', (req, res) => res.send('Bot is Running!'));
+app.get('/', (req, res) => res.send('Bot is Running Live!'));
 app.listen(process.env.PORT || 10000);
 
-bot.launch().catch(err => console.error("Bot launch error:", err));
+bot.launch().then(() => console.log("✅ BOT CONNECTED & READY!"));
 
 bot.on('channel_post', async (ctx) => {
     const text = ctx.channelPost.text || ctx.channelPost.caption || "";
     const msgId = ctx.channelPost.message_id;
     const chatId = ctx.chat.id;
+    const lowerText = text.toLowerCase().trim();
+
+    if (exclusionKeywords.some(k => lowerText.includes(k))) return;
 
     const urlMatches = text.match(/https?:\/\/[^\s]+/g);
-    if (!urlMatches) return;
+    if (!urlMatches || urlMatches.length > 1) return; 
+
     const url = urlMatches[0];
+    const hasNumbers = /\d+/.test(text);
 
-    // प्राइस निकालने का लॉजिक: पिनकोड को छोड़कर आखिरी नंबर
-    const allNumbers = text.match(/\b\d{2,5}\b/g); 
-    let oldPrice = 0;
-    if (allNumbers) {
-        const prices = allNumbers.map(Number).filter(n => n < 100000);
-        oldPrice = prices[prices.length - 1];
+    if (triggerKeywords.some(k => lowerText.includes(k)) || hasNumbers || text.replace(url, '').trim() === "") {
+        console.log(`🎯 New Task Received: ${url}`);
+        
+        // Smart Price Picking (Aakhri chhota number jo PIN code na ho)
+        const allNumbers = text.match(/\b\d{2,5}\b/g); 
+        let oldPrice = allNumbers ? Math.min(...allNumbers.map(Number)) : 0;
+        
+        const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
+
+        db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now() });
+        monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now());
     }
-
-    console.log(`🎯 New Task: ${url} | Extracted Price: ${oldPrice}`);
-    
-    const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video);
-    db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now() });
-    monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now());
 });
 
 async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp) {
@@ -45,45 +49,57 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--no-zygote']
         });
 
         const check = async () => {
+            if (Date.now() - timestamp > 86400000) { // 24 Hours limit
+                db.remove({ msgId });
+                if (browser) await browser.close();
+                return;
+            }
+
             const page = await browser.newPage();
             try {
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
                 
-                // 1. लिंक खोलें (Redirection Bypass)
-                await page.goto(url, { waitUntil: 'networkidle2', timeout: 70000 });
-                await new Promise(r => setTimeout(r, 8000)); // 8 Sec Wait for Page Load
+                console.log(`🔗 Navigating: ${url}`);
+                // networkidle0 taaki redirections poore ho sakein
+                await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
 
-                // 2. असली यूआरएल क्या है? (Unshortened Link)
+                // Extra wait for affiliate links/redirectors (like lootdealtricky or fktr)
+                await new Promise(r => setTimeout(r, 15000));
+
                 const finalUrl = page.url();
-                console.log(`🔗 Unshortened URL: ${finalUrl}`);
+                console.log(`✅ Final Landing URL: ${finalUrl}`);
 
-                // 3. प्राइस ढूंढें
                 const pageData = await page.evaluate(() => {
                     const priceSelectors = [
-                        '.a-price-whole', '.priceToPay', '._30jeq3', '.pdp-price', 
-                        '.pdp-discount-price', '.price-main-price', '.css-1j6m64', '.pdp-m-price'
+                        '.a-price-whole', '.priceToPay', '.a-offscreen', 
+                        '._30jeq3', '._25b18c', '.pdp-price', '.pdp-discount-price', 
+                        '.price-main-price', '.css-1j6m64', '.pdp-m-price'
                     ];
                     let foundPrice = null;
                     for (let s of priceSelectors) {
-                        const el = document.querySelector(s);
-                        if (el && el.innerText) {
+                        const els = document.querySelectorAll(s);
+                        for (let el of els) {
                             let p = parseInt(el.innerText.replace(/\D/g, ''));
                             if (p > 5) { foundPrice = p; break; }
                         }
+                        if (foundPrice) break;
                     }
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|not available|out of stock/i.test(document.body.innerText);
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok|Abhi upalabdh nahin|not available/i.test(document.body.innerText);
                     return { foundPrice, isOutOfStock };
                 });
 
-                console.log(`📊 Stats | Final Link: ${finalUrl.substring(0, 50)}... | Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
+                console.log(`📊 Stats | Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
-                // 4. डिसीजन लें
-                if (pageData.isOutOfStock || (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.35))) {
-                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌`;
+                // 35% Price increase margin
+                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.35));
+
+                if (pageData.isOutOfStock || isPriceIncreased) {
+                    console.log("🚨 DEAL OVER! Updating Telegram...");
+                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
                     
                     try {
                         if (isMedia) {
@@ -91,18 +107,18 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                         } else {
                             await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
                         }
-                    } catch (e) { console.log("Edit Error:", e.message); }
+                    } catch (e) { console.log("Edit Fail:", e.message); }
                     
                     db.remove({ msgId });
                     await browser.close();
                     return;
                 }
             } catch (e) {
-                console.log(`⚠️ Check Error: ${e.message}`);
+                console.log(`⚠️ Check Failed: ${e.message}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
-            setTimeout(check, 300000); // 5 मिनट चेकिंग
+            setTimeout(check, 300000); // Check every 5 mins
         };
         check();
     } catch (e) {
