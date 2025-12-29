@@ -14,7 +14,7 @@ const app = express();
 app.get('/', (req, res) => res.send('Bot is Running Live!'));
 app.listen(process.env.PORT || 10000);
 
-bot.launch().then(() => console.log("✅ BOT CONNECTED!"));
+bot.launch().then(() => console.log("✅ BOT CONNECTED & READY!"));
 
 bot.on('channel_post', async (ctx) => {
     const text = ctx.channelPost.text || ctx.channelPost.caption || "";
@@ -29,15 +29,11 @@ bot.on('channel_post', async (ctx) => {
 
     const url = urlMatches[0];
     const hasTriggerKeyword = triggerKeywords.some(k => lowerText.includes(k));
-    
-    // Naya Trigger Logic: Agar post mein koi bhi number aur URL hai, toh trigger karo
     const hasNumbers = /\d+/.test(text);
-    const isOnlyUrl = text.replace(url, '').trim() === "";
 
-    if (hasTriggerKeyword || isOnlyUrl || hasNumbers) {
-        console.log(`🎯 Triggered: ${url}`);
+    if (hasTriggerKeyword || hasNumbers || text.replace(url, '').trim() === "") {
+        console.log(`🎯 Valid Task: ${url}`);
         
-        // Sabse chhota 2-5 digit ka number lo (Price picking)
         const allNumbers = text.match(/\b\d{2,5}\b/g); 
         let oldPrice = allNumbers ? Math.min(...allNumbers.map(Number)) : 0;
         
@@ -67,33 +63,40 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
             const page = await browser.newPage();
             try {
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-                await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-                await new Promise(r => setTimeout(r, 5000));
+                
+                // Bypass Redirections
+                await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
+                const finalUrl = page.url();
+
+                // Masterlink Check (Link DNA)
+                const isAmazonProduct = finalUrl.includes('/dp/') || finalUrl.includes('/gp/product/');
+                const isFlipkartProduct = finalUrl.includes('/p/') || finalUrl.includes('pid=');
+
+                if ((finalUrl.includes('amazon.in') && !isAmazonProduct) || (finalUrl.includes('flipkart.com') && !isFlipkartProduct)) {
+                    console.log(`⏭️ Masterlink Skipped: ${finalUrl}`);
+                    db.remove({ msgId });
+                    await browser.close(); return;
+                }
 
                 const pageData = await page.evaluate(() => {
-                    // Sabhi sambhav selectors Amazon/Flipkart ke liye
-                    const priceSelectors = [
-                        '.a-price-whole', '.priceToPay', '.a-offscreen', 
-                        '._30jeq3', '._25b18c', '.pdp-price', '.price'
-                    ];
+                    const priceSelectors = ['.a-price-whole', '.priceToPay', '.a-offscreen', '._30jeq3', '._25b18c', '.pdp-price', '.price'];
                     let foundPrice = null;
                     for (let s of priceSelectors) {
-                        const elements = document.querySelectorAll(s);
-                        for (let el of elements) {
+                        const els = document.querySelectorAll(s);
+                        for (let el of els) {
                             let p = parseInt(el.innerText.replace(/\D/g, ''));
                             if (p > 5) { foundPrice = p; break; }
                         }
                         if (foundPrice) break;
                     }
                     const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok|Abhi upalabdh nahin/i.test(document.body.innerText);
-                    const hasCouponOnPage = /coupon|voucher|apply|promo/i.test(document.body.innerText);
+                    const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(document.body.innerText);
                     return { foundPrice, isOutOfStock, hasCouponOnPage };
                 });
 
-                console.log(`📊 Stats: ${url.substring(0, 25)} | Old: ${oldPrice} | Now: ${pageData.foundPrice}`);
+                console.log(`📊 Stats: ${finalUrl.substring(0, 40)}... | Post Price: ${oldPrice} | Live: ${pageData.foundPrice}`);
 
-                // Over condition
-                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30));
+                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30)) && !pageData.hasCouponOnPage;
                 let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
 
                 if (pageData.isOutOfStock || isPriceIncreased || couponMissing) {
@@ -104,13 +107,13 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                         } else {
                             await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
                         }
-                    } catch (e) { console.log("Edit fail:", e.message); }
+                    } catch (e) { console.log("Edit Error:", e.message); }
                     db.remove({ msgId });
                     await browser.close();
                     return;
                 }
             } catch (e) {
-                console.log(`⚠️ Retry: ${url}`);
+                console.log(`⚠️ Retry for ${url}: ${e.message}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
