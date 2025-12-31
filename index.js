@@ -154,9 +154,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30));
 
 // अगर स्टॉक खत्म है OR प्राइस बढ़ गया है, तभी एडिट करें
-if (pageData.isOutOfStock || isPriceIncreased) {
-    // ... Edit Message Code ...
-}
+if (pageData.isOutOfStock || isPriceIncreased);
                 let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
 
                 if (pageData.isOutOfStock || isPriceIncreased || (isCouponPost && couponMissing && pageData.foundPrice)) {
