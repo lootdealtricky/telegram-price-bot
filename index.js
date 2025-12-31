@@ -151,7 +151,12 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
 
                 console.log(`📊 Stats: Price Found: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
-                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.35)) && !pageData.hasCouponOnPage;
+                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30));
+
+// अगर स्टॉक खत्म है OR प्राइस बढ़ गया है, तभी एडिट करें
+if (pageData.isOutOfStock || isPriceIncreased) {
+    // ... Edit Message Code ...
+}
                 let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
 
                 if (pageData.isOutOfStock || isPriceIncreased || (isCouponPost && couponMissing && pageData.foundPrice)) {
