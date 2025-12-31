@@ -50,7 +50,14 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--no-zygote']
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage', 
+                '--single-process', 
+                '--no-zygote',
+                '--disable-blink-features=AutomationControlled' // Myntra/Flipkart bypass के लिए
+            ]
         });
 
         const check = async () => {
@@ -62,24 +69,53 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
 
             const page = await browser.newPage();
             try {
+                // असली ब्राउज़र जैसा दिखने के लिए
+                await page.setViewport({ width: 1280, height: 800 });
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
                 
-                // Bypass Redirections
-                await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
+                console.log(`🔗 Navigating: ${url}`);
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
+
+                // --- विशेष बदलाव: Lootdealtricky और अन्य Redirectors के लिए ---
+                const currentUrl = page.url();
+                if (currentUrl.includes('lootdealtricky') || currentUrl.includes('linkredirect') || currentUrl.includes('fktr.in')) {
+                    console.log("👆 Attempting to click 'Go to Store' or Waiting for Redirect...");
+                    
+                    // अगर वहां कोई बटन है तो उसे क्लिक करें
+                    await page.evaluate(() => {
+                        const buttons = Array.from(document.querySelectorAll('a, button'));
+                        const target = buttons.find(b => 
+                            /Go to Store|Visit Retailer|Get Deal|Continue/i.test(b.innerText)
+                        );
+                        if (target) target.click();
+                    });
+
+                    // रीडायरेक्ट होने के लिए 15 सेकंड का पक्का इंतज़ार
+                    await new Promise(r => setTimeout(r, 15000));
+                }
+
                 const finalUrl = page.url();
+                console.log(`✅ Final Landing URL: ${finalUrl.substring(0, 50)}...`);
 
-                // Masterlink Check (Link DNA)
+                // Masterlink Check
                 const isAmazonProduct = finalUrl.includes('/dp/') || finalUrl.includes('/gp/product/');
-                const isFlipkartProduct = finalUrl.includes('/p/') || finalUrl.includes('pid=');
+                const isFlipkartProduct = finalUrl.includes('/p/') || finalUrl.includes('pid=') || finalUrl.includes('/dm/p/');
+                const isMyntraProduct = finalUrl.includes('/buy');
 
-                if ((finalUrl.includes('amazon.in') && !isAmazonProduct) || (finalUrl.includes('flipkart.com') && !isFlipkartProduct)) {
-                    console.log(`⏭️ Masterlink Skipped: ${finalUrl}`);
+                if ((finalUrl.includes('amazon.in') && !isAmazonProduct) || 
+                    (finalUrl.includes('flipkart.com') && !isFlipkartProduct)) {
+                    console.log(`⏭️ Masterlink Skipped`);
                     db.remove({ msgId });
-                    await browser.close(); return;
+                    if (browser) await browser.close();
+                    return;
                 }
 
                 const pageData = await page.evaluate(() => {
-                    const priceSelectors = ['.a-price-whole', '.priceToPay', '.a-offscreen', '._30jeq3', '._25b18c', '.pdp-price', '.price'];
+                    const priceSelectors = [
+                        '.a-price-whole', '.priceToPay', '._30jeq3', 
+                        '.pdp-price', '.pdp-discount-price', '.price-main-price', 
+                        '.css-1j6m64', '.pdp-m-price', '.a-size-medium.a-color-price'
+                    ];
                     let foundPrice = null;
                     for (let s of priceSelectors) {
                         const els = document.querySelectorAll(s);
@@ -89,18 +125,20 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                         }
                         if (foundPrice) break;
                     }
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok|Abhi upalabdh nahin/i.test(document.body.innerText);
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok|Abhi upalabdh nahin|not available/i.test(document.body.innerText);
                     const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(document.body.innerText);
                     return { foundPrice, isOutOfStock, hasCouponOnPage };
                 });
 
-                console.log(`📊 Stats: ${finalUrl.substring(0, 40)}... | Post Price: ${oldPrice} | Live: ${pageData.foundPrice}`);
+                console.log(`📊 Stats: Price Found: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
-                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30)) && !pageData.hasCouponOnPage;
+                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.35)) && !pageData.hasCouponOnPage;
                 let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
 
-                if (pageData.isOutOfStock || isPriceIncreased || couponMissing) {
+                if (pageData.isOutOfStock || isPriceIncreased || (isCouponPost && couponMissing && pageData.foundPrice)) {
+                    console.log("🚨 DEAL OVER! Updating Message...");
                     const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    
                     try {
                         if (isMedia) {
                             await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
@@ -108,16 +146,17 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                             await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
                         }
                     } catch (e) { console.log("Edit Error:", e.message); }
+                    
                     db.remove({ msgId });
-                    await browser.close();
+                    if (browser) await browser.close();
                     return;
                 }
             } catch (e) {
-                console.log(`⚠️ Retry for ${url}: ${e.message}`);
+                console.log(`⚠️ Retry for URL: ${e.message}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
-            setTimeout(check, 180000); 
+            setTimeout(check, 300000); // 5 मिनट बाद दोबारा चेक
         };
         check();
     } catch (e) {
