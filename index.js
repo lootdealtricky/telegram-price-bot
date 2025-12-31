@@ -156,7 +156,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
             } finally {
                 if (!page.isClosed()) await page.close();
             }
-            setTimeout(check, 300000); // 5 मिनट बाद दोबारा चेक
+            setTimeout(check, 200000); // 5 मिनट बाद दोबारा चेक
         };
         check();
     } catch (e) {
