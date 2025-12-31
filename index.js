@@ -82,7 +82,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                         const target = buttons.find(b => /Go to Store|Visit Retailer|Get Deal|Continue/i.test(b.innerText));
                         if (target) target.click();
                     });
-                    await new Promise(r => setTimeout(r, 12000));
+                    await new Promise(r => setTimeout(r, 20000));
                 }
 
                 const finalUrl = page.url();
