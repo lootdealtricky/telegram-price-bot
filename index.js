@@ -147,7 +147,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
             } finally {
                 if (!page.isClosed()) await page.close();
             }
-            setTimeout(check, 240000); // 4 minutes
+            setTimeout(check, 180000); // 3 minutes
         };
         check();
     } catch (e) {
