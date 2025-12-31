@@ -98,23 +98,46 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 }
 
                 const pageData = await page.evaluate(() => {
-                    const priceSelectors = ['.a-price-whole', '.priceToPay', '._30jeq3', '.pdp-price', '.pdp-discount-price', '#priceblock_ourprice', '#priceblock_dealprice'];
-                    let foundPrice = null;
-                    for (let s of priceSelectors) {
-                        const el = document.querySelector(s);
-                        if (el && el.innerText) {
-                            let p = parseInt(el.innerText.replace(/\D/g, ''));
-                            if (p > 5) { foundPrice = p; break; }
-                        }
-                    }
-                    if (!foundPrice) {
-                        const whole = document.querySelector('.a-price-whole');
-                        if (whole) foundPrice = parseInt(whole.innerText.replace(/\D/g, ''));
-                    }
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|not available/i.test(document.body.innerText);
-                    const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(document.body.innerText);
-                    return { foundPrice, isOutOfStock, hasCouponOnPage };
-                });
+    const priceSelectors = [
+        // --- Flipkart New ---
+        'div[class*="_30jeq3"]',      // Class containing price
+        'div[class*="nx-cp"]',        // New Flipkart price layout
+        'div._16Jk6d',                // Flipkart Special Price
+        'div._30jeq3._16Jk6d',        // Combined Flipkart selector
+
+        // --- Myntra New ---
+        'span.pdp-price',             // Main Price
+        'span.pdp-discount-price',    // Discounted Price
+        '.pdp-m-price',               // Mobile view price
+        'strong.pdp-price',           // Bold price text
+        '.css-1j6m64',                // Latest Myntra dynamic class
+        
+        // --- Amazon (Just in case) ---
+        '.a-price-whole', 
+        '.priceToPay'
+    ];
+    
+    let foundPrice = null;
+
+    for (let s of priceSelectors) {
+        const el = document.querySelector(s);
+        if (el && el.innerText) {
+            // Price में से ₹, , और अन्य चिन्ह हटाने के लिए
+            let p = parseInt(el.innerText.replace(/[^\d]/g, ''));
+            if (p > 5) { foundPrice = p; break; }
+        }
+    }
+
+    // --- Special Myntra Logic (अगर ऊपर वाला काम न करे) ---
+    if (!foundPrice && window.location.host.includes('myntra')) {
+        const metaPrice = document.querySelector('meta[property="product:price:amount"]');
+        if (metaPrice) foundPrice = parseInt(metaPrice.content);
+    }
+
+    const bodyText = document.body.innerText;
+    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|not available/i.test(bodyText);
+    return { foundPrice, isOutOfStock };
+});
 
                 console.log(`📊 Stats: Price Found: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
