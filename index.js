@@ -1,252 +1,127 @@
-/******************************************************************
- * TELEGRAM PRICE MONITOR BOT – FULL FIXED VERSION
- ******************************************************************/
-
 const { Telegraf } = require('telegraf');
 const puppeteer = require('puppeteer');
 const express = require('express');
 const Datastore = require('@seald-io/nedb');
 
-/* =========================
-   ENV VALIDATION
-========================= */
-
-if (!process.env.BOT_TOKEN) {
-  console.error("❌ BOT_TOKEN is missing");
-  process.exit(1);
-}
-
-const BOT_TOKEN = process.env.BOT_TOKEN;
-
-/* =========================
-   INIT
-========================= */
-
-const bot = new Telegraf(BOT_TOKEN);
 const db = new Datastore({ filename: 'tasks.db', autoload: true });
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const bot = new Telegraf(BOT_TOKEN);
 
-/* =========================
-   KEYWORDS
-========================= */
-
-const triggerKeywords = [
-  'loot','pincode','reg','available','grab','price','deal',
-  'coupon','off','voucher','flat','lowest','apply','discount','free'
-];
-
-const exclusionKeywords = [
-  'guide','ajiio.in','review','sale ended'
-];
-
-/* =========================
-   EXPRESS (KEEP ALIVE)
-========================= */
+const triggerKeywords = ['loot', 'pincode', 'reg', 'available', 'grab', 'price', 'deal', 'coupon', 'off', 'voucher', 'flat', 'lowest', 'apply', 'discount', 'free']; 
+const exclusionKeywords = ['guide', 'ajiio.in', 'review', 'sale ended'];
 
 const app = express();
-app.get('/', (_, res) => res.send('Bot is Running Live!'));
+app.get('/', (req, res) => res.send('Bot is Running Live!'));
 app.listen(process.env.PORT || 10000);
 
-/* =========================
-   GLOBAL ERROR SAFETY
-========================= */
-
-process.on('unhandledRejection', err => {
-  console.error('UNHANDLED:', err);
-});
-
-process.on('uncaughtException', err => {
-  console.error('UNCAUGHT:', err);
-});
-
-/* =========================
-   BOT START (NO WEBHOOK CONFLICT)
-========================= */
-
-(async () => {
-  await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-  await bot.launch();
-  console.log("✅ BOT CONNECTED & READY!");
-})();
-
-/* =========================
-   DEBUG: CONFIRM CHANNEL POSTS
-========================= */
-
-bot.on('channel_post', ctx => {
-  console.log("📩 Channel post received");
-});
-
-/* =========================
-   MAIN HANDLER
-========================= */
+bot.launch().then(() => console.log("✅ BOT CONNECTED & READY!"));
 
 bot.on('channel_post', async (ctx) => {
+    const text = ctx.channelPost.text || ctx.channelPost.caption || "";
+    const msgId = ctx.channelPost.message_id;
+    const chatId = ctx.chat.id;
+    const lowerText = text.toLowerCase().trim();
 
-  const text = ctx.channelPost.text || ctx.channelPost.caption || "";
-  const msgId = ctx.channelPost.message_id;
-  const chatId = ctx.chat.id;
-  const lowerText = text.toLowerCase();
+    if (exclusionKeywords.some(k => lowerText.includes(k))) return;
 
-  if (!text) return;
+    const urlMatches = text.match(/https?:\/\/[^\s]+/g);
+    if (!urlMatches || urlMatches.length > 1) return; 
 
-  if (exclusionKeywords.some(k => lowerText.includes(k))) return;
+    const url = urlMatches[0];
+    const hasTriggerKeyword = triggerKeywords.some(k => lowerText.includes(k));
+    const hasNumbers = /\d+/.test(text);
 
-  const urls = text.match(/https?:\/\/[^\s]+/g);
-  if (!urls || urls.length !== 1) return;
+    if (hasTriggerKeyword || hasNumbers || text.replace(url, '').trim() === "") {
+        console.log(`🎯 Valid Task: ${url}`);
+        
+        const allNumbers = text.match(/\b\d{2,5}\b/g); 
+        let oldPrice = allNumbers ? Math.min(...allNumbers.map(Number)) : 0;
+        
+        const isCouponPost = lowerText.includes('coupon') || lowerText.includes('apply');
+        const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
 
-  const url = urls[0];
-
-  const hasTrigger = triggerKeywords.some(k => lowerText.includes(k));
-  const hasNumbers = /\d+/.test(text);
-
-  if (!(hasTrigger || hasNumbers || text.replace(url, '').trim() === "")) return;
-
-  const numbers = text.match(/\b\d{2,5}\b/g);
-  const oldPrice = numbers ? Math.min(...numbers.map(Number)) : 0;
-
-  const isCouponPost = lowerText.includes('coupon') || lowerText.includes('apply');
-  const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
-
-  console.log("🎯 Task accepted:", url);
-
-  db.insert({
-    url,
-    oldPrice,
-    msgId,
-    chatId,
-    originalText: text,
-    isMedia,
-    isCouponPost,
-    timestamp: Date.now()
-  });
-
-  monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
+        db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now(), isCouponPost });
+        monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
+    }
 });
 
-/* =========================
-   PRICE MONITOR
-========================= */
-
-async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, startTime, isCouponPost) {
-
-  let browser;
-
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--single-process',
-        '--no-zygote'
-      ]
-    });
-
-    const check = async () => {
-
-      if (Date.now() - startTime > 86400000) {
-        console.log("⏰ Task expired");
-        db.remove({ msgId }, { multi: true });
-        await browser.close();
-        return;
-      }
-
-      let page;
-
-      try {
-        page = await browser.newPage();
-        await page.setUserAgent(
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36'
-        );
-
-        await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
-        const finalUrl = page.url();
-
-        const isAmazonProduct =
-          finalUrl.includes('/dp/') || finalUrl.includes('/gp/product/');
-        const isFlipkartProduct =
-          finalUrl.includes('/p/') || finalUrl.includes('pid=');
-
-        if (
-          (finalUrl.includes('amazon.in') && !isAmazonProduct) ||
-          (finalUrl.includes('flipkart.com') && !isFlipkartProduct)
-        ) {
-          console.log("⏭️ Masterlink skipped");
-          db.remove({ msgId }, { multi: true });
-          await browser.close();
-          return;
-        }
-
-        const data = await page.evaluate(() => {
-
-          const selectors = [
-            '.a-price-whole','.priceToPay','.a-offscreen',
-            '._30jeq3','._25b18c','.pdp-price','.price'
-          ];
-
-          let price = null;
-
-          for (const s of selectors) {
-            for (const el of document.querySelectorAll(s)) {
-              const v = parseInt(el.innerText.replace(/\D/g, ''));
-              if (v > 5) { price = v; break; }
-            }
-            if (price) break;
-          }
-
-          return {
-            price,
-            outOfStock: /out of stock|currently unavailable|sold out/i.test(document.body.innerText),
-            coupon: /coupon|voucher|apply|promo|collect/i.test(document.body.innerText)
-          };
+async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp, isCouponPost) {
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--no-zygote']
         });
 
-        console.log("📊 Live price:", data.price, "Old:", oldPrice);
-
-        const priceJump =
-          oldPrice > 0 &&
-          data.price &&
-          data.price >= oldPrice * 1.3 &&
-          !data.coupon;
-
-        const couponMissing = isCouponPost && !data.coupon;
-
-        if (data.outOfStock || priceJump || couponMissing) {
-
-          const updatedText =
-`${originalText}
-
-❌❌ Price Over Now ❌❌
-
-If you got screenshot send @Ldt_admin_bot`;
-
-          try {
-            if (isMedia) {
-              await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
-            } else {
-              await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
+        const check = async () => {
+            if (Date.now() - timestamp > 86400000) {
+                db.remove({ msgId });
+                if (browser) await browser.close();
+                return;
             }
-          } catch {}
 
-          db.remove({ msgId }, { multi: true });
-          await browser.close();
-          return;
-        }
+            const page = await browser.newPage();
+            try {
+                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+                
+                // Bypass Redirections
+                await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
+                const finalUrl = page.url();
 
-      } catch (err) {
-        console.log("⚠️ Retry error:", err.message);
-      } finally {
-        if (page && !page.isClosed()) await page.close();
-      }
+                // Masterlink Check (Link DNA)
+                const isAmazonProduct = finalUrl.includes('/dp/') || finalUrl.includes('/gp/product/');
+                const isFlipkartProduct = finalUrl.includes('/p/') || finalUrl.includes('pid=');
 
-      setTimeout(check, 180000); // 3 min
-    };
+                if ((finalUrl.includes('amazon.in') && !isAmazonProduct) || (finalUrl.includes('flipkart.com') && !isFlipkartProduct)) {
+                    console.log(`⏭️ Masterlink Skipped: ${finalUrl}`);
+                    db.remove({ msgId });
+                    await browser.close(); return;
+                }
 
-    check();
+                const pageData = await page.evaluate(() => {
+                    const priceSelectors = ['.a-price-whole', '.priceToPay', '.a-offscreen', '._30jeq3', '._25b18c', '.pdp-price', '.price'];
+                    let foundPrice = null;
+                    for (let s of priceSelectors) {
+                        const els = document.querySelectorAll(s);
+                        for (let el of els) {
+                            let p = parseInt(el.innerText.replace(/\D/g, ''));
+                            if (p > 5) { foundPrice = p; break; }
+                        }
+                        if (foundPrice) break;
+                    }
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|stokta yok|Abhi upalabdh nahin/i.test(document.body.innerText);
+                    const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(document.body.innerText);
+                    return { foundPrice, isOutOfStock, hasCouponOnPage };
+                });
 
-  } catch (err) {
-    console.error("❌ Puppeteer failed:", err.message);
-    if (browser) await browser.close();
-  }
+                console.log(`📊 Stats: ${finalUrl.substring(0, 40)}... | Post Price: ${oldPrice} | Live: ${pageData.foundPrice}`);
+
+                const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30)) && !pageData.hasCouponOnPage;
+                let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
+
+                if (pageData.isOutOfStock || isPriceIncreased || couponMissing) {
+                    const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+                    try {
+                        if (isMedia) {
+                            await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
+                        } else {
+                            await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
+                        }
+                    } catch (e) { console.log("Edit Error:", e.message); }
+                    db.remove({ msgId });
+                    await browser.close();
+                    return;
+                }
+            } catch (e) {
+                console.log(`⚠️ Retry for ${url}: ${e.message}`);
+            } finally {
+                if (!page.isClosed()) await page.close();
+            }
+            setTimeout(check, 180000); 
+        };
+        check();
+    } catch (e) {
+        if (browser) await browser.close();
+    }
 }
+
