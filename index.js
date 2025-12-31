@@ -56,7 +56,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 '--disable-dev-shm-usage', 
                 '--single-process', 
                 '--no-zygote',
-                '--disable-blink-features=AutomationControlled' // Myntra/Flipkart bypass के लिए
+                '--disable-blink-features=AutomationControlled'
             ]
         });
 
@@ -69,41 +69,28 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
 
             const page = await browser.newPage();
             try {
-                // असली ब्राउज़र जैसा दिखने के लिए
                 await page.setViewport({ width: 1280, height: 800 });
                 await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
                 
                 console.log(`🔗 Navigating: ${url}`);
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
 
-                // --- विशेष बदलाव: Lootdealtricky और अन्य Redirectors के लिए ---
                 const currentUrl = page.url();
                 if (currentUrl.includes('lootdealtricky') || currentUrl.includes('linkredirect') || currentUrl.includes('fktr.in')) {
-                    console.log("👆 Attempting to click 'Go to Store' or Waiting for Redirect...");
-                    
-                    // अगर वहां कोई बटन है तो उसे क्लिक करें
+                    console.log("👆 Clicking 'Go to Store'...");
                     await page.evaluate(() => {
                         const buttons = Array.from(document.querySelectorAll('a, button'));
-                        const target = buttons.find(b => 
-                            /Go to Store|Visit Retailer|Get Deal|Continue/i.test(b.innerText)
-                        );
+                        const target = buttons.find(b => /Go to Store|Visit Retailer|Get Deal|Continue/i.test(b.innerText));
                         if (target) target.click();
                     });
-
-                    // रीडायरेक्ट होने के लिए 15 सेकंड का पक्का इंतज़ार
                     await new Promise(r => setTimeout(r, 15000));
                 }
 
                 const finalUrl = page.url();
-                console.log(`✅ Final Landing URL: ${finalUrl.substring(0, 50)}...`);
-
-                // Masterlink Check
                 const isAmazonProduct = finalUrl.includes('/dp/') || finalUrl.includes('/gp/product/');
                 const isFlipkartProduct = finalUrl.includes('/p/') || finalUrl.includes('pid=') || finalUrl.includes('/dm/p/');
-                const isMyntraProduct = finalUrl.includes('/buy');
 
-                if ((finalUrl.includes('amazon.in') && !isAmazonProduct) || 
-                    (finalUrl.includes('flipkart.com') && !isFlipkartProduct)) {
+                if ((finalUrl.includes('amazon.in') && !isAmazonProduct) || (finalUrl.includes('flipkart.com') && !isFlipkartProduct)) {
                     console.log(`⏭️ Masterlink Skipped`);
                     db.remove({ msgId });
                     if (browser) await browser.close();
@@ -111,20 +98,8 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 }
 
                 const pageData = await page.evaluate(() => {
-                    const priceSelectors = [
-                        '.a-price-whole',          // Amazon Main
-                        '.priceToPay',             // Amazon New
-                        '.a-size-medium.a-color-price', // Amazon Older
-                        '._30jeq3',                // Flipkart
-                        '.pdp-price',              // Myntra
-                        '.pdp-discount-price',     // Myntra 2
-                        '#priceblock_ourprice',    // Amazon Old
-                        '#priceblock_dealprice'    // Amazon Deal
-                    ];
-                    
+                    const priceSelectors = ['.a-price-whole', '.priceToPay', '._30jeq3', '.pdp-price', '.pdp-discount-price', '#priceblock_ourprice', '#priceblock_dealprice'];
                     let foundPrice = null;
-                    
-                    // Strategy 1: Selectors से ढूंढना
                     for (let s of priceSelectors) {
                         const el = document.querySelector(s);
                         if (el && el.innerText) {
@@ -132,41 +107,28 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                             if (p > 5) { foundPrice = p; break; }
                         }
                     }
-
-                    // Strategy 2: अगर Selectors काम न करें (Amazon Special)
                     if (!foundPrice) {
                         const whole = document.querySelector('.a-price-whole');
-                        const fraction = document.querySelector('.a-price-fraction');
-                        if (whole) {
-                            foundPrice = parseInt(whole.innerText.replace(/\D/g, ''));
-                        }
+                        if (whole) foundPrice = parseInt(whole.innerText.replace(/\D/g, ''));
                     }
-
-                    const bodyText = document.body.innerText;
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|not available/i.test(bodyText);
-                    const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(bodyText);
-                    
+                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|not available/i.test(document.body.innerText);
+                    const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(document.body.innerText);
                     return { foundPrice, isOutOfStock, hasCouponOnPage };
                 });
 
                 console.log(`📊 Stats: Price Found: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
                 const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice && pageData.foundPrice >= (oldPrice * 1.30));
+                const couponMissing = isCouponPost && !pageData.hasCouponOnPage;
 
-// अगर स्टॉक खत्म है OR प्राइस बढ़ गया है, तभी एडिट करें
-if (pageData.isOutOfStock || isPriceIncreased);
-                let couponMissing = isCouponPost && !pageData.hasCouponOnPage;
-
+                // --- यह हिस्सा अब सही है ---
                 if (pageData.isOutOfStock || isPriceIncreased || (isCouponPost && couponMissing && pageData.foundPrice)) {
                     console.log("🚨 DEAL OVER! Updating Message...");
                     const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
                     
                     try {
-                        if (isMedia) {
-                            await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText);
-                        } else {
-                            await bot.telegram.editMessageText(chatId, msgId, null, updatedText);
-                        }
+                        if (isMedia) { await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText); }
+                        else { await bot.telegram.editMessageText(chatId, msgId, null, updatedText); }
                     } catch (e) { console.log("Edit Error:", e.message); }
                     
                     db.remove({ msgId });
@@ -174,15 +136,14 @@ if (pageData.isOutOfStock || isPriceIncreased);
                     return;
                 }
             } catch (e) {
-                console.log(`⚠️ Retry for URL: ${e.message}`);
+                console.log(`⚠️ Retry: ${e.message}`);
             } finally {
                 if (!page.isClosed()) await page.close();
             }
-            setTimeout(check, 200000); // 2 मिनट बाद दोबारा चेक
+            setTimeout(check, 200000); 
         };
         check();
     } catch (e) {
         if (browser) await browser.close();
     }
 }
-
