@@ -102,43 +102,51 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 } else {
                     // 4. Price Extraction (अगर URL सही है)
                     const pageData = await page.evaluate(() => {
-                        let foundPrice = null;
-                        
-                        // प्राथमिकता 1: JSON-LD
-                        try {
-                            const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-                            for (let s of scripts) {
-                                const data = JSON.parse(s.innerText);
-                                const price = data.offers?.price || data.offers?.lowPrice || (Array.isArray(data.offers) ? data.offers[0]?.price : null);
-                                if (price) { foundPrice = parseInt(price); break; }
-                            }
-                        } catch (e) {}
+    let foundPrice = null;
 
-                        // प्राथमिकता 2: Meta Tags
-                        if (!foundPrice) {
-                            const meta = document.querySelector('meta[property="product:price:amount"]') || document.querySelector('meta[property="og:price:amount"]');
-                            if (meta) foundPrice = parseInt(meta.content);
-                        }
+    // 1. JSON-LD Deep Search (सबसे सटीक तरीका)
+    try {
+        const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+        for (let s of scripts) {
+            const data = JSON.parse(s.innerText);
+            // कभी-कभी डेटा Array में होता है, कभी Object में
+            const target = Array.isArray(data) ? data[0] : data;
+            
+            const price = target.offers?.price || 
+                          target.offers?.lowPrice || 
+                          (Array.isArray(target.offers) ? target.offers[0]?.price : null) ||
+                          target.price; // कुछ नए पेजों के लिए
 
-                        // प्राथमिकता 3: Selectors
-                        if (!foundPrice) {
-                            const selectors = ['span.pdp-price', 'span.pdp-discount-price', '.pdp-m-price', 
-                            'div[class*="_30jeq3"]', 'div._16Jk6d', '.a-price-whole', '.pdp-discount-price'];
-                            for (let s of selectors) {
-                                const el = document.querySelector(s);
-                                if (el && el.innerText) {
-                                    let p = parseInt(el.innerText.replace(/[^\d]/g, ''));
-                                    if (p > 5) { foundPrice = p; break; }
-                                }
-                            }
-                        }
+            if (price) { foundPrice = parseInt(price); break; }
+        }
+    } catch (e) {}
 
-                        const bodyText = document.body.innerText;
-                        const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin/i.test(bodyText);
-                        const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(bodyText);
-                        
-                        return { foundPrice, isOutOfStock, hasCouponOnPage };
-                    });
+    // 2. Flipkart Mobile Specific Selectors (अगर JSON फेल हो जाए)
+    if (!foundPrice) {
+        const selectors = [
+            'div[class*="_30jeq3"]', // Standard Flipkart Price
+            'div[class*="_16Jk6d"]', // Flipkart Price New
+            'span[class*="price"]', 
+            '.nx-cp',                // New Flipkart Mobile Layout
+            'div[style*="font-size: 28px"]', // Direct Style selector for price
+            'div._25b18c > div'      // Container based selector
+        ];
+        for (let s of selectors) {
+            const elements = document.querySelectorAll(s);
+            for (let el of elements) {
+                let p = parseInt(el.innerText.replace(/[^\d]/g, ''));
+                if (p > 10) { foundPrice = p; break; }
+            }
+            if (foundPrice) break;
+        }
+    }
+
+    const bodyText = document.body.innerText;
+    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|NOT_AVAILABLE/i.test(bodyText);
+    const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(bodyText);
+    
+    return { foundPrice, isOutOfStock, hasCouponOnPage };
+});
 
                     console.log(`📊 Stats: Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
@@ -174,5 +182,3 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         if (browser) await browser.close();
     }
 }
-
-
