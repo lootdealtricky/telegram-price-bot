@@ -94,7 +94,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 console.log(`✅ Fully Loaded URL: ${finalUrl}`);
 
                 // 3. URL Validation: चेक करें कि क्या लिंक सच में किसी प्रोडक्ट का है
-                const isValidProductPage = finalUrl.includes('/p/') || finalUrl.includes('pid=') || finalUrl.includes('/dp/') || finalUrl.includes('/buy') || finalUrl.includes('/product');
+                const isValidProductPage = finalUrl.includes('/p/') || finalUrl.includes('pid=') || finalUrl.includes('/dp/') || finalUrl.includes('/buy') || finalUrl.includes('/product') || finalUrl.includes('/it/');
                 
                 if (!isValidProductPage) {
                     console.log("⚠️ URL incomplete or invalid. Retrying in next cycle...");
@@ -174,4 +174,5 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         if (browser) await browser.close();
     }
 }
+
 
