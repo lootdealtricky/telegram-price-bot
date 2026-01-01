@@ -82,7 +82,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
 
                 // 2. Unshorten Logic: अगर URL अभी भी fkrt.cc या myntr.it है, तो थोड़ा और रुकें
                 let finalUrl = page.url();
-                if (finalUrl.includes('fkrt.cc') || finalUrl.includes('myntr.it') || finalUrl.includes('fktr.in') || finalUrl.includes('lootdealtricky.in/url')) {
+                if (finalUrl.includes('fkrt.cc') || finalUrl.includes('myntr.it') || finalUrl.includes('fktr.in') || finalUrl.includes('fkrt.it') || finalUrl.includes('lootdealtricky.in/url')) {
                     console.log("⏳ Waiting for unshorten...");
                     await new Promise(r => setTimeout(r, 15000)); 
                     finalUrl = page.url();
@@ -167,4 +167,5 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
     } catch (e) {
         if (browser) await browser.close();
     }
+
 }
