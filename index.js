@@ -101,48 +101,49 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                     // यहाँ से वापस चले जाएँ ताकि अगले 3 मिनट में फिर कोशिश हो सके
                 } else {
                     // 4. Price Extraction (अगर URL सही है)
-                    const pageData = await page.evaluate(() => {
+                    const pageData = await page.evaluate(async () => {
     let foundPrice = null;
 
-    // 1. JSON-LD Deep Search (सबसे सटीक तरीका)
+    // 1. इंतज़ार करें ताकि कम से कम एक प्राइस वाला एलिमेंट लोड हो जाए
+    const waitForAny = (sel) => document.querySelector(sel);
+    
+    // 2. JSON-LD Deep Search (Myntra/Flipkart दोनों के लिए)
     try {
         const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
         for (let s of scripts) {
             const data = JSON.parse(s.innerText);
-            // कभी-कभी डेटा Array में होता है, कभी Object में
             const target = Array.isArray(data) ? data[0] : data;
-            
-            const price = target.offers?.price || 
-                          target.offers?.lowPrice || 
+            const price = target.offers?.price || target.offers?.lowPrice || 
                           (Array.isArray(target.offers) ? target.offers[0]?.price : null) ||
-                          target.price; // कुछ नए पेजों के लिए
-
+                          target.price;
             if (price) { foundPrice = parseInt(price); break; }
         }
     } catch (e) {}
 
-    // 2. Flipkart Mobile Specific Selectors (अगर JSON फेल हो जाए)
+    // 3. Specific Selectors (Myntra और Flipkart के मोबाइल लेआउट के लिए)
     if (!foundPrice) {
         const selectors = [
-            'div[class*="_30jeq3"]', // Standard Flipkart Price
-            'div[class*="_16Jk6d"]', // Flipkart Price New
-            'span[class*="price"]', 
-            '.nx-cp',                // New Flipkart Mobile Layout
-            'div[style*="font-size: 28px"]', // Direct Style selector for price
-            'div._25b18c > div'      // Container based selector
+            'span.pdp-discount-price', // Myntra
+            'span.pdp-price',          // Myntra Backup
+            'div[class*="_30jeq3"]',   // Flipkart Standard
+            'div[class*="_16Jk6d"]',   // Flipkart New
+            '.nx-cp',                  // Flipkart Super New
+            '.pdp-m-price',            // Myntra Mobile
+            'span[class*="price"]'     // Common backup
         ];
+
         for (let s of selectors) {
-            const elements = document.querySelectorAll(s);
-            for (let el of elements) {
+            const el = document.querySelector(s);
+            if (el && el.innerText) {
                 let p = parseInt(el.innerText.replace(/[^\d]/g, ''));
                 if (p > 10) { foundPrice = p; break; }
             }
-            if (foundPrice) break;
         }
     }
 
     const bodyText = document.body.innerText;
-    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|NOT_AVAILABLE/i.test(bodyText);
+    // OOS चेक करने के और भी कीवर्ड्स
+    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin|NOT_AVAILABLE|Coming Soon/i.test(bodyText);
     const hasCouponOnPage = /coupon|voucher|apply|promo|collect/i.test(bodyText);
     
     return { foundPrice, isOutOfStock, hasCouponOnPage };
@@ -182,3 +183,4 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         if (browser) await browser.close();
     }
 }
+
