@@ -66,7 +66,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1');
                 
                 console.log(`🔗 Navigating: ${url}`);
-                await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 }); // networkidle2 बेहतर है
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 }); // networkidle2 बेहतर है
 
                 let finalUrl = page.url();
                 let retryUnshort = 0;
@@ -154,3 +154,4 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         if (browser) await browser.close();
     }
 }
+
