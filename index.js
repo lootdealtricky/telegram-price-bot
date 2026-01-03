@@ -79,7 +79,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
 
                 // Amazon/Flipkart redirection wait
                 let finalUrl = page.url();
-                if (finalUrl.includes('amzn.to') || finalUrl.includes('fkrt') || finalUrl.includes('bit.ly')) {
+                if (finalUrl.includes('amzn.to') || finalUrl.includes('fktr') || finalUrl.includes('fkrt') || finalUrl.includes('bit.ly')) {
                     await new Promise(r => setTimeout(r, 6000));
                 }
 
@@ -147,3 +147,4 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         browser = null;
     }
 }
+
