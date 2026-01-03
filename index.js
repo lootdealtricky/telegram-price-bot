@@ -8,7 +8,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
 const triggerKeywords = ['loot', 'pincode', 'reg', 'available', 'grab', 'price', 'deal', 'coupon', 'off', 'voucher', 'flat', 'lowest', 'apply', 'discount', 'free']; 
-const exclusionKeywords = ['guide', 'ajiio.in', 'review', 'sale ended'];
+const exclusionKeywords = ['guide', 'ajiio.in', 'review', 'sale ended','Lootdealtricky.in/url/channels'];
 
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Running Live!'));
@@ -154,4 +154,5 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         if (browser) await browser.close();
     }
 }
+
 
