@@ -89,7 +89,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
     // 1. Amazon के लिए खास सफाई (Cleaning)
     if (window.location.hostname.includes('amazon')) {
         // Amazon पर मुख्य कीमत '.a-price-whole' के अंदर होती है
-        const priceElement = document.querySelector('.a-price-whole');
+        const priceElement = document.querySelector('a-price-whole');
         if (priceElement) {
             // सिर्फ पहला मिलने वाला मुख्य नंबर उठाएं (ताकि डिलीवरी या MRP न जुड़े)
             let pText = priceElement.innerText.split('\n')[0].replace(/[^\d]/g, '');
@@ -163,5 +163,6 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         browser = null;
     }
 }
+
 
 
