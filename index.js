@@ -84,27 +84,43 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
                 }
 
                 const pageData = await page.evaluate(() => {
-                    let foundPrice = null;
-                    const selectors = [
-                        '.a-price-whole', '#corePrice_desktop .a-offscreen', // Amazon
-                        'span.pdp-discount-price', 'span.pdp-price', // Myntra
-                        'div[class*="_30jeq3"]', '.nx-cp', 'div[class*="_16Jk6d"]' // Flipkart
-                    ];
+    let foundPrice = null;
+    
+    // 1. Amazon के लिए खास सफाई (Cleaning)
+    if (window.location.hostname.includes('amazon')) {
+        // Amazon पर मुख्य कीमत '.a-price-whole' के अंदर होती है
+        const priceElement = document.querySelector('.a-price-whole');
+        if (priceElement) {
+            // सिर्फ पहला मिलने वाला मुख्य नंबर उठाएं (ताकि डिलीवरी या MRP न जुड़े)
+            let pText = priceElement.innerText.split('\n')[0].replace(/[^\d]/g, '');
+            foundPrice = parseInt(pText);
+        }
+    }
 
-                    for (let s of selectors) {
-                        const el = document.querySelector(s);
-                        if (el && el.innerText) {
-                            let p = parseInt(el.innerText.replace(/[^\d]/g, ''));
-                            if (p > 10) { foundPrice = p; break; }
-                        }
-                    }
+    // 2. अगर Amazon नहीं है या कीमत नहीं मिली, तो बाकी सेलेक्टर्स चेक करें
+    if (!foundPrice) {
+        const selectors = [
+            'span.pdp-discount-price', 'span.pdp-price', // Myntra
+            'div[class*="_30jeq3"]', '.nx-cp', 'div[class*="_16Jk6d"]', // Flipkart
+            '#priceblock_ourprice', '#priceblock_dealprice' // Amazon Desktop Backup
+        ];
 
-                    const bodyText = document.body.innerText;
-                    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin/i.test(bodyText);
-                    const hasCouponOnPage = /coupon|voucher|apply/i.test(bodyText);
-                    
-                    return { foundPrice, isOutOfStock, hasCouponOnPage };
-                });
+        for (let s of selectors) {
+            const el = document.querySelector(s);
+            if (el && el.innerText) {
+                // यहाँ भी split('\n') का उपयोग करें ताकि मल्टीपल लाइन्स का डेटा न जुड़े
+                let p = parseInt(el.innerText.split('\n')[0].replace(/[^\d]/g, ''));
+                if (p > 10) { foundPrice = p; break; }
+            }
+        }
+    }
+
+    const bodyText = document.body.innerText;
+    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin/i.test(bodyText);
+    const hasCouponOnPage = /coupon|voucher|apply/i.test(bodyText);
+    
+    return { foundPrice, isOutOfStock, hasCouponOnPage };
+});
 
                 console.log(`📊 Stats [${msgId}]: Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
 
@@ -147,4 +163,5 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         browser = null;
     }
 }
+
 
