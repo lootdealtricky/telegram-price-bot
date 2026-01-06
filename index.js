@@ -126,7 +126,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
 
                 // --- फिक्स किया हुआ Logic ---
                 if (pageData.foundPrice || pageData.isOutOfStock) {
-                    const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice >= (oldPrice * 1.40)); // 40% की वृद्धि
+                    const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice >= (oldPrice * 1.20)); // 20% की वृद्धि
                     const couponMissing = isCouponPost && !pageData.hasCouponOnPage;
 
                     if (pageData.isOutOfStock || isPriceIncreased || (isCouponPost && couponMissing)) {
@@ -163,6 +163,7 @@ async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia,
         browser = null;
     }
 }
+
 
 
 
