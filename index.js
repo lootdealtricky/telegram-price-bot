@@ -44,12 +44,12 @@ bot.launch({ dropPendingUpdates: true }).then(() => {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         await page.goto(url, { 
-            waitUntil: 'networkidle0', // इसे बदलें
-            timeout: 25000 
+            waitUntil: 'networkidle2', // इसे बदलें
+            timeout: 30000 
         });
 
         // Amazon के रीडायरेक्ट के लिए थोड़ा इंतज़ार करें
-        await new Promise(r => setTimeout(r, 5000)); 
+        await new Promise(r => setTimeout(r, 7000)); 
 
         const finalUrl = page.url();
         console.log("✅ Final URL found:", finalUrl);
@@ -254,7 +254,6 @@ try {
         '#corePrice_feature_div .a-price-whole',
         '#twister-plus-price-data-price',
          
-
 
     // Flipkart core
     '._30jeq3',
