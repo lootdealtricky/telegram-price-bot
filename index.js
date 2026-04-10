@@ -408,38 +408,41 @@ async function monitorTask(task) {
 /* ================= BOT ================= */
 
 bot.on('channel_post', async (ctx) => {
-
     const text = ctx.channelPost.text || ctx.channelPost.caption || "";
     const urls = text.match(/https?:\/\/[^\s]+/g);
 
-// ❌ No link OR multiple links → skip
-if (!urls || urls.length !== 1) {
-    console.log("⛔ Skipped: No link or multiple links");
-    return;
-}
+    // ❌ No link OR multiple links → skip
+    if (!urls || urls.length !== 1) {
+        console.log("⛔ Skipped: No link or multiple links");
+        return;
+    }
 
-const url = urls[0];
-const msgId = ctx.channelPost.message_id;
-const postDate = ctx.channelPost.date * 1000; // Telegram date seconds में होती है
+    const url = urls[0];
+    const msgId = ctx.channelPost.message_id;
+    const postDate = ctx.channelPost.date * 1000;
 
-// ❌ अगर पोस्ट 3 घंटे से ज़्यादा पुरानी है, तो प्रोसेस न करें
-if (Date.now() - postDate > 3 * 60 * 60 * 1000) {
-    console.log(`⛔ Skipped: Too old post (${msgId})`);
-    return;
-}
+    // ❌ अगर पोस्ट 3 घंटे से ज़्यादा पुरानी है
+    if (Date.now() - postDate > 3 * 60 * 60 * 1000) {
+        console.log(`⛔ Skipped: Too old post (${msgId})`);
+        return;
+    }
 
+    // ❌ MASTER LINK check
+    if (/^https?:\/\/(www\.)?(flipkart\.com|amazon\.in|myntra\.com)\/?$/i.test(url)) {
+        console.log("⛔ Skipped: Master link");
+        return;
+    }
 
-// ❌ MASTER LINK (strong check)
-if (/^https?:\/\/(www\.)?(flipkart\.com|amazon\.in|myntra\.com)\/?$/i.test(url)) {
-    console.log("⛔ Skipped: Master link");
-    return;
-}
+    // --- यहाँ से सुधार शुरू ---
 
-    db.update(
-        { msgId },
-        { $set: { msgId, url, status: "active", timestamp: Date.now() } },
-        { upsert: true }
-    );
+    // 1. पहले चेक करें कि क्या यह पहले से चल रहा है (DB और Queue दोनों में)
+    const checkTask = await new Promise(res => db.findOne({ msgId, status: "running" }, (e, d) => res(d)));
+    const inQueue = queue.find(q => q.msgId === msgId);
+
+    if (checkTask || inQueue) {
+        console.log("⛔ Skipped: Task already running or in queue for", msgId);
+        return;
+    }
 
     const basePrice = extractPostPrice(text);
     const coupon = extractCoupon(text, basePrice);
@@ -451,43 +454,18 @@ if (/^https?:\/\/(www\.)?(flipkart\.com|amazon\.in|myntra\.com)\/?$/i.test(url))
 
     const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
 
-// ❌ duplicate task skip
-const exists = queue.find(q => q.msgId === msgId);
+    // 2. अब इसे "running" मार्क करें और क्यू में डालें
+    db.update({ msgId }, { $set: { msgId, url, status: "running", timestamp: Date.now() } }, { upsert: true });
 
-// + DB check भी जोड़ो
-if (exists) return;
+    queue.push({
+        url,
+        msgId,
+        chatId: ctx.chat.id,
+        text,
+        oldPrice,
+        coupon,
+        isMedia
+    });
 
-const alreadyRunning = await new Promise(res =>
-    db.findOne({ msgId }, (e, d) => res(d))
-);
-
-if (alreadyRunning && alreadyRunning.status === "running") return;
-
-    // 1. सबसे पहले चेक करें कि क्या यह पहले से चल रहा है
-const alreadyRunning = await new Promise(res =>
-    db.findOne({ msgId, status: "running" }, (e, d) => res(d))
-);
-
-if (alreadyRunning || queue.find(q => q.msgId === msgId)) {
-    console.log("⛔ Skipped: Task already running for", msgId);
-    return;
-}
-
-// 2. अगर नहीं चल रहा, तो अब इसे "running" मार्क करें
-db.update({ msgId }, { $set: { status: "running" } }, { upsert: true });
-
-// 3. अब क्यू में डालें
-queue.push({
-    url,
-    msgId,
-    chatId: ctx.chat.id,
-    text,
-    oldPrice,
-    coupon,
-    isMedia
-});
-
-processQueue();
-
-    
+    processQueue();
 });
