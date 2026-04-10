@@ -1,170 +1,459 @@
 const { Telegraf } = require('telegraf');
+const axios = require('axios');
 const puppeteer = require('puppeteer');
 const express = require('express');
 const Datastore = require('@seald-io/nedb');
 
+/* ================= DB ================= */
 const db = new Datastore({ filename: 'tasks.db', autoload: true });
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const bot = new Telegraf(BOT_TOKEN);
 
-const triggerKeywords = ['loot', 'pincode', 'available', 'grab', 'price', 'deal', 'coupon', 'off', 'voucher', 'flat', 'lowest', 'apply', 'discount', 'free']; 
-const exclusionKeywords = ['guide', 'ajiio.in', 'review', 'sale ended', 'Lootdealtricky.in/url/channels'];
+/* ================= BOT ================= */
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
+/* ================= SERVER ================= */
 const app = express();
-app.get('/', (req, res) => res.send('Bot is Running Live!'));
-app.listen(process.env.PORT || 10000);
+app.get('/', (req, res) => res.send("OK"));
+app.listen(process.env.PORT || 7860, '0.0.0.0');
 
-bot.launch().catch(err => console.log("Bot Launch Error:", err.message));
+/* ================= GLOBAL ================= */
+let browser = null;
+let queue = [];
+let isProcessing = false;
 
-bot.on('channel_post', async (ctx) => {
-    const text = ctx.channelPost.text || ctx.channelPost.caption || "";
-    const msgId = ctx.channelPost.message_id;
-    const chatId = ctx.chat.id;
-    const lowerText = text.toLowerCase().trim();
+/* ================= BOT START ================= */
+bot.launch({ dropPendingUpdates: true });
 
-    if (exclusionKeywords.some(k => lowerText.includes(k))) return;
+/* ================= UTILS ================= */
 
-    const urlMatches = text.match(/https?:\/\/[^\s]+/g);
-    if (!urlMatches || urlMatches.length > 1) return; 
-
-    const url = urlMatches[0];
-    const hasTriggerKeyword = triggerKeywords.some(k => lowerText.includes(k));
-    const hasNumbers = /\d+/.test(text);
-
-    if (hasTriggerKeyword || hasNumbers || text.replace(url, '').trim() === "") {
-        console.log(`🎯 Valid Task: ${url}`);
-        
-        // --- पुराना प्राइस निकालने का बेहतर तरीका ---
-        const allNumbers = text.match(/\b\d{2,5}\b/g); 
-        let oldPrice = 0;
-        if (allNumbers) {
-            const filtered = allNumbers.map(Number).filter(n => n > 25); // छोटे नंबर्स (जैसे 10% off) को इग्नोर करें
-            if (filtered.length > 0) oldPrice = Math.min(...filtered);
-        }
-        
-        const isCouponPost = lowerText.includes('coupon') || lowerText.includes('apply');
-        const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
-
-        db.insert({ url, oldPrice, msgId, chatId, originalText: text, isMedia, timestamp: Date.now(), isCouponPost });
-        monitorPrice(url, oldPrice, msgId, chatId, text, isMedia, Date.now(), isCouponPost);
-    }
-});
-
-async function monitorPrice(url, oldPrice, msgId, chatId, originalText, isMedia, timestamp, isCouponPost) {
-    let browser;
+        async function resolveUrl(url) {
+    let page;
     try {
-        browser = await puppeteer.launch({
-            headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
+        console.log("🔍 Browser Unshorting Start:", url);
+        const br = await getBrowser();
+        page = await br.newPage();
+
+        // ⚡ User-Agent सेट करें ताकि Amazon ब्लॉक न करे
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+        await page.goto(url, { 
+            waitUntil: 'networkidle0', // इसे बदलें
+            timeout: 25000 
         });
 
-        const check = async () => {
-            // अगर ब्राउज़र बंद हो चुका है तो लूप रोक दें
-            if (!browser) return;
+        // Amazon के रीडायरेक्ट के लिए थोड़ा इंतज़ार करें
+        await new Promise(r => setTimeout(r, 3000)); 
 
-            if (Date.now() - timestamp > 86400000) {
-                db.remove({ msgId }, {}, () => {});
-                await browser.close().catch(() => {});
-                browser = null;
-                return;
-            }
+        const finalUrl = page.url();
+        console.log("✅ Final URL found:", finalUrl);
+        return finalUrl;
 
-            let page;
-            try {
-                page = await browser.newPage();
-                await page.setViewport({ width: 375, height: 667, isMobile: true });
-                await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1');
-                
-                await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
-
-                // Amazon/Flipkart redirection wait
-                let finalUrl = page.url();
-                if (finalUrl.includes('amzn.to') || finalUrl.includes('fktr') || finalUrl.includes('fkrt') || finalUrl.includes('bit.ly')) {
-                    await new Promise(r => setTimeout(r, 6000));
-                }
-
-                const pageData = await page.evaluate(() => {
-    let foundPrice = null;
-    
-    // 1. Amazon के लिए खास सफाई (Cleaning)
-    if (window.location.hostname.includes('amazon')) {
-        // Amazon पर मुख्य कीमत '.a-price-whole' के अंदर होती है
-        const priceElement = document.querySelector('.a-price-whole');
-        if (priceElement) {
-            // सिर्फ पहला मिलने वाला मुख्य नंबर उठाएं (ताकि डिलीवरी या MRP न जुड़े)
-            let pText = priceElement.innerText.split('\n')[0].replace(/[^\d]/g, '');
-            foundPrice = parseInt(pText);
-        }
-    }
-
-    // 2. अगर Amazon नहीं है या कीमत नहीं मिली, तो बाकी सेलेक्टर्स चेक करें
-    if (!foundPrice) {
-        const selectors = [
-            'span.pdp-discount-price', 'span.pdp-price', // Myntra
-            'div[class*="_30jeq3"]', '.nx-cp', 'div[class*="_16Jk6d"]', // Flipkart
-            '#priceblock_ourprice', '#priceblock_dealprice' // Amazon Desktop Backup
-        ];
-
-        for (let s of selectors) {
-            const el = document.querySelector(s);
-            if (el && el.innerText) {
-                // यहाँ भी split('\n') का उपयोग करें ताकि मल्टीपल लाइन्स का डेटा न जुड़े
-                let p = parseInt(el.innerText.split('\n')[0].replace(/[^\d]/g, ''));
-                if (p > 10) { foundPrice = p; break; }
-            }
-        }
-    }
-
-    const bodyText = document.body.innerText;
-    const isOutOfStock = /Out of Stock|Currently unavailable|Sold Out|Abhi upalabdh nahin/i.test(bodyText);
-    const hasCouponOnPage = /coupon|voucher|apply/i.test(bodyText);
-    
-    return { foundPrice, isOutOfStock, hasCouponOnPage };
-});
-
-                console.log(`📊 Stats [${msgId}]: Price: ${pageData.foundPrice} | OOS: ${pageData.isOutOfStock}`);
-
-                // --- फिक्स किया हुआ Logic ---
-                if (pageData.foundPrice || pageData.isOutOfStock) {
-                    const isPriceIncreased = (oldPrice > 0 && pageData.foundPrice >= (oldPrice * 1.20)); // 20% की वृद्धि
-                    const couponMissing = isCouponPost && !pageData.hasCouponOnPage;
-
-                    if (pageData.isOutOfStock || isPriceIncreased || (isCouponPost && couponMissing)) {
-                        console.log(`🚨 DEAL OVER for ${msgId}`);
-                        const updatedText = `${originalText}\n\n❌❌Price Over Now❌❌ \n\nIf you got Send Screenshot me @Ldt_admin_bot`;
-                        
-                        try {
-                            if (isMedia) { await bot.telegram.editMessageCaption(chatId, msgId, null, updatedText); }
-                            else { await bot.telegram.editMessageText(chatId, msgId, null, updatedText); }
-                        } catch (e) { console.log("Edit Error:", e.message); }
-                        
-                        db.remove({ msgId }, {}, () => {});
-                        const b = browser;
-                        browser = null; // ताकि लूप और finally इसे टच न करें
-                        await b.close().catch(() => {});
-                        return;
-                    }
-                }
-            } catch (e) {
-                console.log(`⚠️ Log Error [${msgId}]: ${e.message}`);
-            } finally {
-                // यहाँ क्रैश से बचाव (अगर ब्राउज़र अभी भी है, तभी पेज बंद करें)
-                if (page && browser) {
-                    await page.close().catch(() => {});
-                }
-            }
-            
-            if (browser) setTimeout(check, 180000); 
-        };
-        
-        check();
     } catch (e) {
-        if (browser) await browser.close().catch(() => {});
-        browser = null;
+        console.log("⚠️ Browser Unshort Failed:", e.message);
+        return url;
+    } finally {
+        if (page) await page.close();
     }
 }
 
+// 🛒 AMAZON
+function extractAmazon(html) {
+    let match = html.match(/a-price-whole">([\d,]+)/);
+    return match ? parseInt(match[1].replace(/,/g,'')) : null;
+}
+
+// 🛒 FLIPKART
+function extractFlipkart(html) {
+    let match =
+        html.match(/_30jeq3[^>]*>([\d,]+)/) ||
+        html.match(/_16Jk6d[^>]*>([\d,]+)/) ||
+        html.match(/₹\s?([\d,]+)/);
+
+    return match ? parseInt(match[1].replace(/,/g,'')) : null;
+}
+
+// 🛒 MYNTRA
+function extractMyntra(html) {
+    let match = html.match(/"price":\s?(\d+)/);
+    return match ? parseInt(match[1]) : null;
+}
+
+// 🧠 POST PRICE
+function extractPostPrice(text) {
+
+    let matches = [...text.matchAll(/₹\s?(\d{2,6})/g)];
+
+    if (matches.length > 0) {
+        let prices = matches.map(m => parseInt(m[1]));
+        return Math.min(...prices);
+    }
+
+    let match = text.match(/(\d{2,6})\s?\/-/);
+    if (match) return parseInt(match[1]);
+
+    const firstLine = text.split('\n')[0];
+    match = firstLine.match(/(\d{2,6})/);
+    if (match) return parseInt(match[1]);
+
+    return 0;
+}
+
+// 🧠 COUPON + DISCOUNT
+function extractCoupon(text, basePrice) {
+
+    let discount = 0;
+
+    text = text.toLowerCase();
+
+    // ₹ values detect
+    let matches = [...text.matchAll(/₹\s?(\d{1,5})/g)];
+    if (matches.length > 0) {
+        let values = matches.map(m => parseInt(m[1]));
+        discount += Math.max(...values);
+    }
+
+    // % discount
+    let percentMatch = text.match(/(\d{1,3})\s?%/);
+    if (percentMatch && basePrice > 0) {
+        let percent = parseInt(percentMatch[1]);
+        discount += Math.floor((percent / 100) * basePrice);
+    }
+
+    // bank/card
+    let bankMatches = [...text.matchAll(/₹\s?(\d{1,5}).*(bank|card|credit|debit)/g)];
+    for (let m of bankMatches) {
+        discount += parseInt(m[1]);
+    }
+
+    return discount;
+}
+
+/* ================= FAST SCRAPE ================= */
+
+async function fastScrape(url) {
+    try {
+        const finalUrl = url;
+
+        const { data } = await axios.get(finalUrl, {
+    headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml",
+        "Connection": "keep-alive"
+    },
+    timeout: 15000
+});
+
+        if (/amazon\./i.test(finalUrl)) return extractAmazon(data);
+        if (/flipkart\./i.test(finalUrl)) return extractFlipkart(data);
+        if (/myntra\./i.test(finalUrl)) return extractMyntra(data);
+
+        return null;
+
+    } catch {
+        return null;
+    }
+}
+
+/* ================= PUPPETEER ================= */
+
+async function getBrowser() {
+    if (!browser || !browser.connected) { // अगर ब्राउज़र बंद हो गया हो तो नया खोलें
+        browser = await puppeteer.launch({
+            headless: "new",
+            executablePath: '/usr/bin/chromium',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas', // परफॉरमेंस के लिए
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process', // RAM बचाने के लिए
+                '--disable-gpu'
+            ]
+        });
+    
+    process.setMaxListeners(0); 
+    }
+    return browser;
+}
 
 
+async function fallbackScrape(url) {
+    try {
+        const br = await getBrowser();
+        const page = await br.newPage();
+
+        await page.setUserAgent(
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)'
+        );
+
+        await page.goto(url, {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000
+});
+
+// 🔥 extra wait for Flipkart JS
+await new Promise(r => setTimeout(r, 4000));
+
+// 🔥 scroll multiple times
+for (let i = 0; i < 3; i++) {
+    await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+    await new Promise(r => setTimeout(r, 1000));
+}
+        await page.waitForSelector('body', { timeout: 5000 }).catch(() => {});
+
+// 🔥 Flipkart popup close (IMPORTANT)
+try {
+    await page.click('button._2KpZ6l._2doB4z', { timeout: 3000 });
+} catch {}
+
+        const result = await page.evaluate(() => {
+
+    const bodyText = document.body.innerText.toLowerCase();
+
+    if (
+        bodyText.includes("currently unavailable") ||
+        bodyText.includes("out of stock") ||
+        bodyText.includes("sold out")
+    ) {
+        return "OUT";
+    }
+
+    // 🟢 ADD THIS BLOCK (Myntra fix)
+    const script = document.querySelector('script[type="application/ld+json"]');
+
+    if (script) {
+        try {
+            const json = JSON.parse(script.innerText);
+
+            if (json && json.offers && json.offers.price) {
+                return parseInt(json.offers.price);
+            }
+
+        } catch {}
+    }
+
+    // 🔍 selectors
+    const selectors = [
+    '.a-price-whole',
+    '#priceblock_ourprice',
+
+    // Flipkart core
+    '._30jeq3',
+    '._16Jk6d',
+    '._25b18c',
+    '.Nx9bqj.C93Y7v',
+
+    // Flipkart dynamic
+    '[class*="Nx9bqj"]',
+    '[class*="CEmiEU"]',
+    '[class*="hl05eU"]',   // 🔥 ADD
+    '._1_WHN1',    // 🔥 ADD
+     '[data-testid="price"]',
+      '[class*="priceView"]',
+        
+    // generic fallback
+    '[class*="_30jeq3"]',
+    '[class*="price"]',
+
+    // Myntra के लिए ये नया सेलेक्टर जोड़ें
+    '.pdp-discount-summary .pdp-price strong', 
+    '.pdp-mrp',
+    '.pdp-price'
+
+];
+
+    for (let s of selectors) {
+        const el = document.querySelector(s);
+        if (el) {
+            let p = parseInt(el.innerText.replace(/[^\d]/g,''));
+            if (p > 10) return p;
+        }
+    }
+  // 🔥 FINAL TEXT FALLBACK (Flipkart killer fix)
+let match = document.body.innerText.match(/₹\s?(\d{2,6})/);
+if (match) return parseInt(match[1]);
+    return null;
+});
+        await page.close();
+
+        if (result === "OUT") return 9999999;
+
+        return result;
+
+    } catch {
+    return null;
+}
+}
+
+/* ================= MAIN ================= */
+
+async function getPrice(url) {
+
+    console.log("🔗 URL:", url);
+
+    const finalUrl = await resolveUrl(url);
+
+let price = await fastScrape(finalUrl);
+
+    // ✅ fast success
+    if (typeof price === "number" && price > 10) {
+        console.log("⚡ Fast success:", price);
+        return price;
+    }
+
+    console.log("🐢 Using browser...");
+    price = await fallbackScrape(finalUrl);
+
+    // ✅ fallback success
+    if (typeof price === "number" && price > 10) {
+        console.log("🐢 Fallback success:", price);
+        return price;
+    }
+
+    console.log("❌ Price not found");
+    return null;
+}
+async function processQueue() {
+
+    if (isProcessing || queue.length === 0) return;
+
+    isProcessing = true;
+
+    while (queue.length > 0) {
+    const task = queue[0]; // पहले टास्क को पकड़ें
+    try {
+        await monitorTask(task); // जब तक एक टास्क पूरा न हो, दूसरा न चले
+    } catch (e) {
+        console.error("❌ Task Error:", e);
+    }
+    queue.shift(); // टास्क पूरा होने के बाद उसे लिस्ट से हटाएं
+}
 
 
+    isProcessing = false;
+}
+
+async function monitorTask(task) {
+    const { url, msgId, chatId, text, oldPrice, coupon, isMedia } = task;
+    let startTime = Date.now();
+
+    while (Date.now() - startTime < 3 * 60 * 60 * 1000) { // 3 घंटे तक मॉनिटरिंग
+        const price = await getPrice(url);
+        console.log("🔍 Price check:", url, price);
+
+        if (!price || typeof price !== "number" || price < 10) {
+            await new Promise(r => setTimeout(r, 60000)); // 1 min wait if error
+            continue;
+        }
+
+        let finalPrice = price - (coupon > 0 && coupon < price ? coupon : 0);
+
+        const dbTask = await new Promise(res =>
+            db.findOne({ msgId }, (e, d) => res(d))
+        );
+
+        // 🔥 1. PRICE OVER LOGIC
+        if (oldPrice > 0 && finalPrice >= oldPrice * 1.2 && dbTask?.status !== "over") {
+            const updatedText = `${text}\n\n❌❌Price Over Now❌❌\n\nIf you got Send Screenshot me @Ldt_admin_bot`;
+            try {
+                if (isMedia) {
+                    await bot.telegram.editMessageCaption(chatId, msgId, undefined, updatedText);
+                } else {
+                    await bot.telegram.editMessageText(chatId, msgId, undefined, updatedText);
+                }
+            } catch (err) { console.log("⚠️ Edit Error:", err.description); }
+            db.update({ msgId }, { $set: { status: "over" } });
+        }
+
+        // 🟢 2. BACK IN STOCK LOGIC
+        if (dbTask && dbTask.status === "over" && finalPrice <= oldPrice) {
+            const replyText = `🟢━━━━━━━━━━━━━━🟢\n🔥 BACK IN STOCK 🔥\n🟢━━━━━━━━━━━━━━🟢\n\n💰 Current Price: ₹${finalPrice}\n⚡ Deal is LIVE again!\n👉 Grab fast before it's gone`;
+            try {
+                await bot.telegram.sendMessage(chatId, replyText, {
+                    reply_to_message_id: msgId
+                });
+                console.log(`✅ Reply sent: ${msgId}`);
+            } catch (err) { console.log("⚠️ Reply Error:", err.description); }
+            db.update({ msgId }, { $set: { status: "active" } });
+        }
+
+        // ⏱️ हर चेक के बाद 3 मिनट का इंतज़ार (जरूरी है)
+        await new Promise(r => setTimeout(r, 300000)); 
+
+    } // <--- 'while' लूप यहाँ बंद होगा
+
+    console.log("🧹 Task duration over for:", msgId);
+    db.remove({ msgId }, {}); 
+} 
+
+/* ================= BOT ================= */
+
+bot.on('channel_post', async (ctx) => {
+
+    const text = ctx.channelPost.text || ctx.channelPost.caption || "";
+    const urls = text.match(/https?:\/\/[^\s]+/g);
+
+// ❌ No link OR multiple links → skip
+if (!urls || urls.length !== 1) {
+    console.log("⛔ Skipped: No link or multiple links");
+    return;
+}
+
+const url = urls[0];
+const msgId = ctx.channelPost.message_id;
+
+// ❌ MASTER LINK (strong check)
+if (/^https?:\/\/(www\.)?(flipkart\.com|amazon\.in|myntra\.com)\/?$/i.test(url)) {
+    console.log("⛔ Skipped: Master link");
+    return;
+}
+
+    db.update(
+        { msgId },
+        { $set: { msgId, url, status: "active", timestamp: Date.now() } },
+        { upsert: true }
+    );
+
+    const basePrice = extractPostPrice(text);
+    const coupon = extractCoupon(text, basePrice);
+
+    let oldPrice = basePrice;
+    if (coupon > 0 && basePrice > coupon) {
+        oldPrice = basePrice - coupon;
+    }
+
+    const isMedia = !!(ctx.channelPost.photo || ctx.channelPost.video || ctx.channelPost.document);
+
+// ❌ duplicate task skip
+const exists = queue.find(q => q.msgId === msgId);
+
+// + DB check भी जोड़ो
+if (exists) return;
+
+const alreadyRunning = await new Promise(res =>
+    db.findOne({ msgId }, (e, d) => res(d))
+);
+
+if (alreadyRunning && alreadyRunning.status === "running") return;
+
+    db.update(
+    { msgId },
+    { $set: { status: "running" } },
+    {}
+);
+
+queue.push({
+    url,
+    msgId,
+    chatId: ctx.chat.id,
+    text,
+    oldPrice,
+    coupon,
+    isMedia
+});
+
+processQueue();
+    
+});
