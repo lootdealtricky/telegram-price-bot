@@ -469,6 +469,15 @@ if (alreadyRunning && alreadyRunning.status === "running") return;
     {}
 );
 
+    // चेक करें कि क्या यह मैसेज पहले से ही चल रहा है (DB के जरिए)
+const checkTask = await new Promise(res => db.findOne({ msgId, status: "running" }, (e, d) => res(d)));
+
+if (checkTask) {
+    console.log("⛔ Skipped: Task already running for", msgId);
+    return;
+}
+
+    
 queue.push({
     url,
     msgId,
