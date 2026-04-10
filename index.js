@@ -21,7 +21,15 @@ let queue = [];
 let isProcessing = false;
 
 /* ================= BOT START ================= */
-bot.launch({ dropPendingUpdates: true });
+bot.launch({ dropPendingUpdates: true }).then(() => {
+    console.log("🚀 Bot is live!");
+    // 🧹 3 घंटे से पुराने टास्क स्टार्टअप पर ही डिलीट करें
+    const threeHoursAgo = Date.now() - (3 * 60 * 60 * 1000);
+    db.remove({ timestamp: { $lt: threeHoursAgo } }, { multi: true }, (err, numRemoved) => {
+        console.log(`🧹 Cleaned up ${numRemoved} old tasks from DB.`);
+    });
+});
+
 
 /* ================= UTILS ================= */
 
