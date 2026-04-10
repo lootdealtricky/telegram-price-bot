@@ -411,6 +411,14 @@ if (!urls || urls.length !== 1) {
 
 const url = urls[0];
 const msgId = ctx.channelPost.message_id;
+const postDate = ctx.channelPost.date * 1000; // Telegram date seconds में होती है
+
+// ❌ अगर पोस्ट 3 घंटे से ज़्यादा पुरानी है, तो प्रोसेस न करें
+if (Date.now() - postDate > 3 * 60 * 60 * 1000) {
+    console.log(`⛔ Skipped: Too old post (${msgId})`);
+    return;
+}
+
 
 // ❌ MASTER LINK (strong check)
 if (/^https?:\/\/(www\.)?(flipkart\.com|amazon\.in|myntra\.com)\/?$/i.test(url)) {
