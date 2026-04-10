@@ -250,6 +250,10 @@ try {
         '#priceblock_ourprice',
         '#priceblock_dealprice',
         'span.a-color-price',
+        'span.a-price-whole',
+        '#corePrice_feature_div .a-price-whole',
+        '#twister-plus-price-data-price',
+         
 
 
     // Flipkart core
@@ -265,6 +269,11 @@ try {
     '._1_WHN1',    // 🔥 ADD
      '[data-testid="price"]',
       '[class*="priceView"]',
+
+      Mobile main price
+        '.Nx9bqj',        // Desktop main price
+        '._30jeq3._16Jk6d',
+       
         
     // generic fallback
     '[class*="_30jeq3"]',
@@ -279,8 +288,9 @@ try {
 
     for (let s of selectors) {
         const el = document.querySelector(s);
-        if (el) {
-            let p = parseInt(el.innerText.replace(/[^\d]/g,''));
+        // हमने यहाँ el.innerText.trim() चेक किया है ताकि खाली डेटा न मिले
+        if (el && el.innerText.trim().length > 0) {
+            let p = parseInt(el.innerText.replace(/[^\d]/g, ''));
             if (p > 10) return p;
         }
     }
