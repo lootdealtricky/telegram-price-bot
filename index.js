@@ -244,8 +244,13 @@ try {
 
     // 🔍 selectors
     const selectors = [
-    '.a-price-whole',
-    '#priceblock_ourprice',
+     // 🔥 Amazon (New & Old)
+        '.a-price-whole',
+        '.a-price .a-offscreen',
+        '#priceblock_ourprice',
+        '#priceblock_dealprice',
+        'span.a-color-price',
+
 
     // Flipkart core
     '._30jeq3',
