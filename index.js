@@ -463,21 +463,20 @@ const alreadyRunning = await new Promise(res =>
 
 if (alreadyRunning && alreadyRunning.status === "running") return;
 
-    db.update(
-    { msgId },
-    { $set: { status: "running" } },
-    {}
+    // 1. सबसे पहले चेक करें कि क्या यह पहले से चल रहा है
+const alreadyRunning = await new Promise(res =>
+    db.findOne({ msgId, status: "running" }, (e, d) => res(d))
 );
 
-    // चेक करें कि क्या यह मैसेज पहले से ही चल रहा है (DB के जरिए)
-const checkTask = await new Promise(res => db.findOne({ msgId, status: "running" }, (e, d) => res(d)));
-
-if (checkTask) {
+if (alreadyRunning || queue.find(q => q.msgId === msgId)) {
     console.log("⛔ Skipped: Task already running for", msgId);
     return;
 }
 
-    
+// 2. अगर नहीं चल रहा, तो अब इसे "running" मार्क करें
+db.update({ msgId }, { $set: { status: "running" } }, { upsert: true });
+
+// 3. अब क्यू में डालें
 queue.push({
     url,
     msgId,
@@ -489,5 +488,6 @@ queue.push({
 });
 
 processQueue();
+
     
 });
