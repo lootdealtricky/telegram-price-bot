@@ -338,23 +338,18 @@ let price = await fastScrape(finalUrl);
     return null;
 }
 async function processQueue() {
+    if (queue.length === 0) return;
 
-    if (isProcessing || queue.length === 0) return;
+    // क्यू से टास्क निकालें
+    const task = queue.shift();
+    
+    // टास्क को बिना 'await' किए बैकग्राउंड में चला दें (ताकि अगला टास्क तुरंत शुरू हो सके)
+    monitorTask(task).catch(e => console.error("❌ Monitor Error:", e));
 
-    isProcessing = true;
-
-    while (queue.length > 0) {
-    const task = queue[0]; // पहले टास्क को पकड़ें
-    try {
-        await monitorTask(task); // जब तक एक टास्क पूरा न हो, दूसरा न चले
-    } catch (e) {
-        console.error("❌ Task Error:", e);
+    // अगर और भी टास्क हैं, तो तुरंत फिर से प्रोसेस करें
+    if (queue.length > 0) {
+        setImmediate(processQueue);
     }
-    queue.shift(); // टास्क पूरा होने के बाद उसे लिस्ट से हटाएं
-}
-
-
-    isProcessing = false;
 }
 
 async function monitorTask(task) {
