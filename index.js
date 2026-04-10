@@ -49,7 +49,7 @@ bot.launch({ dropPendingUpdates: true }).then(() => {
         });
 
         // Amazon के रीडायरेक्ट के लिए थोड़ा इंतज़ार करें
-        await new Promise(r => setTimeout(r, 3000)); 
+        await new Promise(r => setTimeout(r, 5000)); 
 
         const finalUrl = page.url();
         console.log("✅ Final URL found:", finalUrl);
@@ -357,7 +357,7 @@ async function monitorTask(task) {
         console.log("🔍 Price check:", url, price);
 
         if (!price || typeof price !== "number" || price < 10) {
-            await new Promise(r => setTimeout(r, 60000)); // 1 min wait if error
+            await new Promise(r => setTimeout(r, 300000)); // 1 min wait if error
             continue;
         }
 
