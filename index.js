@@ -269,7 +269,7 @@ try {
      '[data-testid="price"]',
       '[class*="priceView"]',
 
-      Mobile main price
+     // Mobile main price
         '.Nx9bqj',        // Desktop main price
         '._30jeq3._16Jk6d',
        
